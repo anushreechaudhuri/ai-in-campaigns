@@ -11,7 +11,7 @@ npm run build
 npm run dev
 ```
 
-The source repository contains application code and asset references. Campaign data, captured HTML, policy PDFs, submitted text, detector reports, and research logs live in Cloudflare R2. See [asset-links.json](asset-links.json) for the catalog location. A local static preview needs an R2 route proxy or the deployed catalog URL.
+The source repository contains application code and asset references. Campaign data, captured HTML, policy PDFs, submitted text, detector reports, and research logs live in Cloudflare R2. See [asset-links.json](asset-links.json) for the catalog location. The development server proxies read-only asset requests to the deployed R2 route.
 
 ## Hosting and data
 
