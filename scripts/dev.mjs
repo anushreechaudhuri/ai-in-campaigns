@@ -10,7 +10,8 @@ createServer(async(req,res)=>{
   if(url.pathname.startsWith('/research-assets/')){
    const headers={};for(const k of ['range','if-none-match'])if(req.headers[k])headers[k]=req.headers[k];
    const response=await fetch(new URL(url.pathname,links.site),{method:req.method,headers});
-   res.writeHead(response.status,Object.fromEntries(response.headers));res.end(Buffer.from(await response.arrayBuffer()));return;
+   const responseHeaders=Object.fromEntries(response.headers);delete responseHeaders['content-encoding'];delete responseHeaders['content-length'];
+   res.writeHead(response.status,responseHeaders);res.end(Buffer.from(await response.arrayBuffer()));return;
   }
   const path=resolve(root,'.'+decodeURIComponent(url.pathname)+(url.pathname.endsWith('/')?'index.html':''));
   if(!path.startsWith(root+sep))throw Error('Invalid path');

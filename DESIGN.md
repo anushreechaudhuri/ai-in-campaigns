@@ -142,9 +142,9 @@ Headlines use the headline role; panel headings use title. Dense table cells and
 
 The centered main area has a 1560px maximum width and 4.3% side padding. A 76px header precedes filters, a four-column statistics strip, a two-column overview and the full-width candidate table. The overview uses a 1.85:1 map/comparison split with a 270px minimum comparison column.
 
-At 1100px and below, side gutters become 28px, search occupies a full filter row and the overview ratio becomes 1.6:1. At 760px and below, gutters become 18px, the header is 64px tall, chamber controls fill a row, filters wrap into two columns, statistics become a two-by-two grid and the overview stacks vertically. The Words column is hidden while the table remains horizontally scrollable.
+At 1100px and below, side gutters become 28px, search occupies a full filter row and the overview ratio becomes 1.6:1. At 760px and below, gutters become 18px, the header is 64px tall, chamber controls fill a row, filters wrap into two columns, statistics become a two-by-two grid and the overview stacks vertically. On phones, campaign rows become two-column labeled records with the candidate name above; all fields, word counts and report actions remain visible without horizontal scrolling. Native fields use 16px text and controls have at least 44px touch targets. The header wraps into a brand/year row and a campaign-count/export row.
 
-The fixed report drawer occupies `min(800px, 68vw)`, changes to `min(800px, 80vw)` at 1100px and fills the viewport width at 760px. Its PDF region scrolls independently. The map height cap rises from 340px to 380px at 1600px; mobile removes the cap.
+The fixed report drawer occupies `min(800px, 68vw)`, changes to `min(800px, 80vw)` at 1100px and fills the viewport width at 760px. Its PDF region scrolls independently. On phones the drawer uses the dynamic viewport height and safe-area insets, locks background scrolling and wraps PDF zoom onto its own toolbar row. The map height cap rises from 340px to 380px at 1600px; mobile removes the cap.
 
 ## Elevation & Depth
 
@@ -161,7 +161,7 @@ Use small, controlled corners: controls use the control radius; data panels use 
 - **Fields:** native selects and a compact bordered search field. Shared keyboard focus uses a 3px outline with a 3px offset; search uses a 2px focus-within outline with a 1px offset.
 - **Statistics:** one bordered white strip, internal vertical rules and large tabular values. The AI statistic uses Pangram’s darker AI ink.
 - **Map and comparisons:** Pangram data scale, white state borders, outlined hover/focus/selection and labeled horizontal bars. Tooltip values are tabular. Missing values remain gray and display an em dash.
-- **Candidate table:** pale header, thin row rules, subtle row hover, right-aligned numeric columns and compact View buttons. Missing reports show a small neutral No analysis label.
+- **Candidate table:** pale header, thin row rules, subtle row hover, right-aligned numeric columns and compact View buttons. Missing reports show a small neutral No analysis yet label.
 - **Report drawer:** white heading and breakdown area above a pale toolbar and gray PDF well. External links use outlined controls and an inline external-link icon. Close uses a square icon control. The PDF keeps its original visual treatment.
 
 Primary-outcome and incumbency comparisons use two columns on desktop and one column on phone, with fixed 0–100% horizontal scales, AI orange-red data bars, numerical percentages and analyzed-candidate counts. The adjacent aggregation selector stays synchronized with the map selector.
