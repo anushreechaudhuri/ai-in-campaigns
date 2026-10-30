@@ -21,7 +21,7 @@ export async function researchAsset(request, bucket) {
     headers.set('Content-Security-Policy',"sandbox; default-src 'none'");
   }
   let status=200;
-  if (object.range && 'offset' in object.range && 'length' in object.range) {
+  if (request.headers.has('range') && object.range && 'offset' in object.range && 'length' in object.range) {
     status=206;headers.set('Content-Range',`bytes ${object.range.offset}-${object.range.offset+object.range.length-1}/${object.size}`);
     headers.set('Content-Length',String(object.range.length));
   } else headers.set('Content-Length',String(object.size));
