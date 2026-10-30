@@ -1,0 +1,18 @@
+{
+  "name": "ai-in-campaigns",
+  "main": "worker.js",
+  "account_id": "e84fe353569d25772e1018a57e090b26",
+  "compatibility_date": "2026-10-30",
+  "workers_dev": true,
+  "assets": {
+    "directory": "./dist",
+    "binding": "ASSETS",
+    "not_found_handling": "404-page"
+  },
+  "r2_buckets": [
+    {
+      "binding": "RESEARCH",
+      "bucket_name": "ai-in-campaigns-data"
+    }
+  ]
+}

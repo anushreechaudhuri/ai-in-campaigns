@@ -1,0 +1,19 @@
+{
+  "name": "ai-in-campaigns",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node build.mjs",
+    "dev": "python3 -m http.server 4173 --bind 127.0.0.1 --directory dist",
+    "test": "node --test test/*.test.mjs",
+    "deploy": "npm run build && wrangler deploy"
+  },
+  "dependencies": {
+    "d3-geo": "3.1.1",
+    "esbuild": "0.28.2",
+    "pdfjs-dist": "6.4.299",
+    "topojson-client": "3.1.0",
+    "us-atlas": "3.0.1"
+  }
+}
