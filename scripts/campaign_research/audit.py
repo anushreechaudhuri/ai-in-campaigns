@@ -126,8 +126,8 @@ def build_audit(rows, dataset, manifests, corpus_root=None):
                        "verified_policy_pdfs": sum(r["kind"] == "policy_pdf" for r in checked),
                        "manifest_only_sources": len(metadata), "evidence_errors": ";".join(invalid),
                        "latest_capture": max((r["captured_at"] for r in checked), default="", key=lambda value: datetime.fromisoformat(value.replace("Z", "+00:00"))),
-                       "detector_documents": len(docs),
-                       "wayback_pointer": (match or {}).get("archive", ""),
+                       "detector_documents": len(docs) if match is not None else None,
+                       "wayback_pointer": match.get("archive", "") if match is not None else None,
                        "priority": priority, "priority_basis": "Supplied outcome snapshot; current election status not verified", "next_action": action})
     return output
 
@@ -141,6 +141,8 @@ def audit(args):
     output = build_audit(rows, dataset, manifests, args.corpus_root)
     summary = {"generated_at": now(), "scope": "intended_inventory" if args.inventory else "published_dataset_only",
                "candidate_count": len(output), "expected_candidates": args.expected_candidates,
+               "published_dataset_supplied": bool(args.dataset),
+               "published_dataset_candidates": len(dataset.get("candidates", [])) if args.dataset else None,
                "denominator_matches_expectation": len(output) == args.expected_candidates if args.expected_candidates else None,
                "website_populated": sum(bool(r["website"]) for r in output),
                "preservation": dict(Counter(r["preservation"] for r in output)),

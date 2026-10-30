@@ -56,7 +56,8 @@ class AuditTests(unittest.TestCase):
         duplicate = dict(name="Jane Doe", state="ME", chamber="House", district="1", documents=[{}])
         rows = build_audit([candidate()], {"candidates": [{"id": "a", **duplicate}, {"id": "b", **duplicate}]}, [])
         self.assertEqual(rows[0]["join_method"], "unmatched")
-        self.assertEqual(rows[0]["detector_documents"], 0)
+        self.assertIsNone(rows[0]["detector_documents"])
+        self.assertIsNone(rows[0]["wayback_pointer"])
 
     def test_denominator_mismatch_retains_outputs_and_fails(self):
         with tempfile.TemporaryDirectory() as root:

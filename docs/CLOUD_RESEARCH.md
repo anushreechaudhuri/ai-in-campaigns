@@ -53,7 +53,7 @@ The canonical CSV/JSON fields are:
 
 Keep a source export with its retrieval time, outcome snapshot date, and original column names privately. Do not substitute the Ballotpedia Candidate URL for a campaign website. Sparse campaign website metadata establishes an enrichment gap; it says nothing by itself about how many campaign sites are already archived. Refresh stale election outcomes before treating queue priorities as current. These tools record the supplied outcome basis and do not claim to verify election results.
 
-Dashboard joins use a canonical URL or explicit dashboard ID first, then an exact unique `name/state/chamber/district` tuple. The join method is recorded. Ambiguous or unmatched rows stay unmatched; review identity joins before research conclusions. No fuzzy name matching or guessed URL is used.
+Dashboard joins use a canonical URL or explicit dashboard ID first, then an exact unique `name/state/chamber/district` tuple. The join method is recorded. Ambiguous or unmatched rows stay unmatched, with null detector counts and archive pointers; an absent match is not evidence of no analysis. The summary records whether a published dataset was supplied. Review identity joins before research conclusions. No fuzzy name matching or guessed URL is used.
 
 Capture manifests are JSONL, one receipt per captured response:
 
