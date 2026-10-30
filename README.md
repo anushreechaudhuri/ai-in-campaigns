@@ -34,3 +34,9 @@ npm run deploy
 ## Verification
 
 Tests cover weighted calculations, filter combinations, missing values, source-route isolation, conditional downloads and PDF byte-range responses. The original research directory retains capture and submission manifests and checksums.
+
+## Cloud research jobs
+
+See [the cloud runbook](docs/CLOUD_RESEARCH.md) for inventory reconciliation, bounded campaign captures, private R2 persistence, detector-result validation, and reviewable dashboard dataset staging. Research tooling requires Python 3.12+ and no Python packages. `npm run test:research` runs its offline tests.
+
+The manual Actions workflows are staged definitions; no job, credentials, infrastructure, schedule, or deployment is enabled by this change. Public audits cover the published dataset only. Full-inventory coverage requires the canonical candidate inventory and the actual preservation manifests/objects. Missing detector analyses and missing website metadata do not establish missing source preservation.

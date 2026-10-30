@@ -1,0 +1,27 @@
+name: Public preservation audit
+# No schedule, secrets, campaign crawling, scoring, deployment, or repository writes.
+# Only material already published by the dashboard can appear in these artifacts.
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: public-research-audit
+  cancel-in-progress: false
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python scripts/research.py snapshot --out runs/public
+      - run: python scripts/research.py audit --dataset runs/public/dataset.json --out runs/public/audit
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: public-audit-${{ github.run_id }}
+          path: runs/public/
+          retention-days: 7

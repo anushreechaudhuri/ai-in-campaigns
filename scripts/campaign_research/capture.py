@@ -1,0 +1,150 @@
+"""Bounded page/PDF captures; no recursive crawl, scoring, or archive submissions."""
+import csv
+import json
+import time
+import urllib.parse
+import urllib.robotparser
+from html.parser import HTMLParser
+from pathlib import Path
+from .common import USER_AGENT, digest, get_header, now, public_url, request, write_json
+
+
+class Links(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self.hrefs = []
+
+    def handle_starttag(self, tag, attrs):
+        if tag == "a":
+            self.hrefs.extend(value for name, value in attrs if name == "href" and value)
+
+
+class Collector:
+    def __init__(self, out, delay=2, transport=request, sleeper=time.sleep):
+        self.out = Path(out)
+        self.delay = max(2, delay)
+        self.transport = transport
+        self.sleep = sleeper
+        self.robots = {}
+
+    def allowed(self, url):
+        origin = urllib.parse.urlunsplit((*urllib.parse.urlsplit(url)[:2], "", "", ""))
+        if origin not in self.robots:
+            self.sleep(self.delay)
+            checked_at = now()
+            status, headers, body = self.transport(origin + "/robots.txt", max_bytes=512 * 1024)
+            receipt = {"url": origin + "/robots.txt", "checked_at": checked_at,
+                       "status": status, "sha256": digest(body)}
+            self.out.mkdir(parents=True, exist_ok=True)
+            (self.out / "robots").mkdir(exist_ok=True)
+            robot_path = f"robots/{digest(body)}.txt"
+            (self.out / robot_path).write_bytes(body)
+            receipt["path"] = robot_path
+            parser = urllib.robotparser.RobotFileParser()
+            if status == 404:
+                parser.parse([])
+            elif status == 200:
+                robot_text = body.decode("utf-8", "replace")
+                if "<html" in robot_text.lower() or "<!doctype html" in robot_text.lower():
+                    raise ValueError("robots.txt returned HTML; manual review required")
+                parser.parse(robot_text.splitlines())
+            else:
+                # Redirects, auth, throttling, and errors fail closed.
+                raise ValueError(f"robots.txt HTTP {status}; manual review required")
+            self.robots[origin] = (parser, receipt)
+        parser, receipt = self.robots[origin]
+        if not parser.can_fetch(USER_AGENT, url):
+            raise ValueError("robots.txt disallows capture")
+        delay = parser.crawl_delay(USER_AGENT) or parser.crawl_delay("*") or self.delay
+        rate = parser.request_rate(USER_AGENT) or parser.request_rate("*")
+        if rate:
+            delay = max(delay, rate.seconds / rate.requests)
+        if delay > 30:
+            raise ValueError("robots crawl delay exceeds this bounded job; manual review required")
+        self.sleep(max(self.delay, delay))
+        return receipt
+
+    def capture(self, row):
+        url = row["source_url"]
+        checks, redirects = [], []
+        for _ in range(6):
+            url = public_url(url)
+            checks.append(self.allowed(url))
+            status, headers, body = self.transport(url)
+            if status in (301, 302, 303, 307, 308):
+                target = urllib.parse.urljoin(url, get_header(headers, "location"))
+                redirects.append({"from": url, "to": target, "status": status})
+                url = target
+                continue
+            if status != 200:
+                raise ValueError(f"Source HTTP {status}; no capture accepted")
+            content_type = get_header(headers, "content-type").split(";")[0].lower()
+            is_pdf = body.startswith(b"%PDF-")
+            if not is_pdf and any(marker in body.lower() for marker in (b"/cdn-cgi/challenge-platform/", b"cf-chl-", b"<title>just a moment", b"<title>access denied")):
+                raise ValueError("Source returned an access-control page; manual review required")
+            if not is_pdf and content_type not in ("text/html", "application/xhtml+xml"):
+                raise ValueError("Only HTML or PDF campaign sources accepted")
+            if not body or (row.get("kind") == "policy_pdf" and not is_pdf):
+                raise ValueError("Requested policy PDF did not return PDF bytes")
+            sha = digest(body)
+            relative = f"objects/{sha}.{'pdf' if is_pdf else 'html'}"
+            (self.out / "objects").mkdir(parents=True, exist_ok=True)
+            (self.out / relative).write_bytes(body)
+            captured_at = now()
+            record = {"candidate_id": row["candidate_id"], "source_url": row["source_url"],
+                      "final_url": url, "status": "captured", "captured_at": captured_at,
+                      "kind": ("policy_pdf" if row.get("kind") == "policy_pdf" else "campaign_pdf") if is_pdf else "campaign_page", "path": relative,
+                      "sha256": sha, "bytes": len(body), "content_type": content_type,
+                      "etag": get_header(headers, "etag"), "last_modified": get_header(headers, "last-modified"),
+                      "robots_checks": checks, "redirects": redirects,
+                      "scope": "single_response_body; embedded assets not captured"}
+            discovered = []
+            if not is_pdf:
+                parser = Links()
+                parser.feed(body.decode("utf-8", "replace"))
+                for href in parser.hrefs:
+                    candidate = urllib.parse.urljoin(url, href)
+                    p = urllib.parse.urlsplit(candidate)
+                    if p.scheme == "https" and p.netloc == urllib.parse.urlsplit(url).netloc and p.path.lower().endswith(".pdf"):
+                        discovered.append({"candidate_id": row["candidate_id"], "source_url": candidate.split("#")[0], "kind": "candidate_pdf", "discovered_from": url, "review_required": True})
+            return record, discovered
+        raise ValueError("Too many source redirects")
+
+
+def capture(args):
+    if not 1 <= args.limit <= 100:
+        raise ValueError("Capture limit must be 1–100; submit bounded batches")
+    with open(args.queue, encoding="utf-8-sig", newline="") as source:
+        rows = list(csv.DictReader(source))
+    collector = Collector(args.out, args.delay)
+    out = Path(args.out)
+    out.mkdir(parents=True, exist_ok=True)
+    discoveries = []
+    count = 0
+    with (out / "captures.jsonl").open("a") as manifest:
+        for row in rows:
+            if count >= args.limit:
+                break
+            if row.get("next_action") not in (None, "", "preserve_known_website"):
+                continue
+            if str(row.get("review_required", "")).lower() in ("true", "1", "yes"):
+                continue
+            if not row.get("source_url"):
+                row["source_url"] = row.get("website", "")
+            if not row.get("source_url") or not row.get("candidate_id"):
+                continue
+            count += 1
+            try:
+                record, found = collector.capture(row)
+                discoveries.extend(found)
+            except Exception as error:
+                # Network exception strings can contain credentials; log error types only.
+                record = {"candidate_id": row["candidate_id"], "source_url": row["source_url"],
+                          "checked_at": now(), "status": "blocked_or_error",
+                          "reason": str(error) if isinstance(error, ValueError) else type(error).__name__}
+            manifest.write(json.dumps(record) + "\n")
+            manifest.flush()
+    write_json(out / "discovered-pdfs.json", list({(r["candidate_id"], r["source_url"]): r for r in discoveries}.values()))
+    write_json(out / "capture-summary.json", {"finished_at": now(), "attempted": count,
+                                              "limit": args.limit, "scoring_requests": 0})
+    print(json.dumps({"attempted": count, "limit": args.limit, "scoring_requests": 0}))
