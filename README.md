@@ -2,6 +2,8 @@
 
 A dashboard of preserved Pangram analyses of 2026 congressional campaign policy text.
 
+Live: https://midterms-ai.org
+
 ## Develop
 
 ```sh

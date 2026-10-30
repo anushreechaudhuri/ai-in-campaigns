@@ -14,5 +14,11 @@
       "binding": "RESEARCH",
       "bucket_name": "ai-in-campaigns-data"
     }
+  ],
+  "routes": [
+    {
+      "pattern": "midterms-ai.org",
+      "custom_domain": true
+    }
   ]
 }

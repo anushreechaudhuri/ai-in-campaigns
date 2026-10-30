@@ -1,9 +1,9 @@
 {
-  "catalog": "https://ai-in-campaigns.anushreec2.workers.dev/research-assets/catalog.json",
+  "catalog": "https://midterms-ai.org/research-assets/catalog.json",
   "cloudflare_account_id": "e84fe353569d25772e1018a57e090b26",
   "r2_bucket": "ai-in-campaigns-data",
   "public_prefix": "public/",
   "archive_prefix": "private/",
   "dataset_and_reports": "Resolved from the catalog; research files are not stored in Git.",
-  "site": "https://ai-in-campaigns.anushreec2.workers.dev"
+  "site": "https://midterms-ai.org"
 }
