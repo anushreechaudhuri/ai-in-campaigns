@@ -2,9 +2,9 @@
 name: AI in Campaigns dashboard
 description: A compact campaign analysis dashboard in a modern US government visual style.
 colors:
-  primary: "#005ea2"
-  navy: "#162e51"
-  header-edge: "#2491ff"
+  primary: "#315e71"
+  navy: "#253746"
+  header-edge: "#7babb8"
   neutral-bg: "#f6f7f9"
   surface: "#fff"
   text: "#172638"
@@ -180,3 +180,5 @@ Primary-outcome and incumbency comparisons use two columns on desktop and one co
 - Don’t use party colors to encode AI percentages.
 - Don’t add decorative shadows to ordinary data panels.
 - Don’t restyle the preserved PDF as dashboard typography.
+
+The independent project uses slate navy navigation, a muted teal edge and an authored ballot-box mark. Pangram semantic colors remain unchanged.
