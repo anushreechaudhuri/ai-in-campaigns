@@ -10,8 +10,9 @@ import urllib.parse
 UNRESERVED = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~")
 
 
-def normalized_path(value):
-    value = urllib.parse.quote(value, safe="/%:@!$&'()*+,;=?-._~[]")
+def normalized_path(value, *, pattern=False):
+    # Only rules interpret '*'/'$'; literal URI occurrences become %2A/%24.
+    value = urllib.parse.quote(value, safe="/%:@!&'()+,;=?-._~[]" + ("*$" if pattern else ""))
     def percent(match):
         char = chr(int(match.group()[1:], 16))
         return char if char in UNRESERVED else match.group().upper()
@@ -37,14 +38,14 @@ class RobotsPolicy:
                 directives.append((field, value))
         if agents:
             groups.append((agents, directives))
-        matches = [(max((len(a) for a in group_agents if a != "*" and a in product), default=0), values)
-                   for group_agents, values in groups if "*" in group_agents or any(a in product for a in group_agents)]
-        specificity = max((length for length, _ in matches), default=0)
-        selected = [directive for length, values in matches if length == specificity for directive in values]
+        matches = [values for group_agents, values in groups if product in group_agents]
+        if not matches:
+            matches = [values for group_agents, values in groups if "*" in group_agents]
+        selected = [directive for values in matches for directive in values]
         self.rules, delays = [], []
         for field, value in selected:
             if field in ("allow", "disallow") and value:
-                pattern = normalized_path(value)
+                pattern = normalized_path(value, pattern=True)
                 anchored = pattern.endswith("$")
                 if anchored:
                     pattern = pattern[:-1]

@@ -237,6 +237,16 @@ class RobotsTests(unittest.TestCase):
         self.assertFalse(policy.can_fetch("https://example.org/search?q=abc"))
         self.assertTrue(policy.can_fetch("https://example.org/searchXq=abc"))
 
+    def test_literal_uri_special_characters_match_percent_encoded_rules(self):
+        policy = RobotsPolicy("User-agent: *\nDisallow: /file-%2A.html\nDisallow: /foo-%24\n", "CampaignPreservationAudit/1.0")
+        self.assertFalse(policy.can_fetch("https://example.org/file-*.html"))
+        self.assertFalse(policy.can_fetch("https://example.org/foo-$"))
+        self.assertTrue(policy.can_fetch("https://example.org/file-other.html"))
+
+    def test_unrelated_partial_product_does_not_override_wildcard_group(self):
+        policy = RobotsPolicy("User-agent: *\nDisallow: /\nUser-agent: Audit\nAllow: /\n", "CampaignPreservationAudit/1.0")
+        self.assertFalse(policy.can_fetch("https://example.org/policy"))
+
 
 if __name__ == "__main__":
     unittest.main()
