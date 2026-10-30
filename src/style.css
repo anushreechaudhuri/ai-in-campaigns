@@ -23,3 +23,5 @@
 .map-note{margin-top:14px;color:var(--muted);font-size:12px;line-height:1.5;max-width:75ch}
 
 .page-intro{min-width:0}.page-intro p{margin-top:8px;max-width:75ch;font-size:12px;line-height:1.5;color:var(--muted)}.page-title>.segmented{flex-shrink:0}
+
+.outcome-note{margin:-17px 0 31px;max-width:none}
