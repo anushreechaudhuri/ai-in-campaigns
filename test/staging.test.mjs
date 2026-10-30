@@ -19,3 +19,15 @@ test('Dataset staging retains exact input bytes and a content-addressed proposal
 test('Rejects fabricated zero analysis, invalid scores, and duplicate IDs',()=>{
   for(const candidates of [[{...missing,ai:0}],[{...missing,ai:101}],[missing,missing]])assert.throws(()=>validateDataset({candidates}));
 });
+const analyzed=(extra={})=>({...missing,words:100,ai:10,assisted:20,human:70,documents:[{pdf:'/research-assets/reports/one.pdf',pages:1,ai:10,assisted:20,human:70}],...extra});
+test('Rejects impossible candidate/document compositions and mismatched single-report scores',()=>{
+  assert.throws(()=>validateDataset({candidates:[analyzed({ai:100,assisted:100,human:100})]}),/composition/);
+  assert.throws(()=>validateDataset({candidates:[analyzed({documents:[{pdf:'/research-assets/reports/one.pdf',pages:1,ai:100,assisted:100,human:100}]})]}),/composition/);
+  assert.throws(()=>validateDataset({candidates:[analyzed({ai:100,assisted:0,human:0})]}),/disagree/);
+});
+test('Checks word-weighted multi-report consistency and records when weights are missing',()=>{
+  const docs=[{pdf:'/research-assets/reports/one.pdf',pages:1,words:75,ai:0,assisted:0,human:100},{pdf:'/research-assets/reports/two.pdf',pages:1,words:25,ai:100,assisted:0,human:0}];
+  assert.equal(validateDataset({candidates:[analyzed({documents:docs,ai:25,assisted:0,human:75})]}).wordWeightedDetectorAI,25);
+  assert.throws(()=>validateDataset({candidates:[analyzed({documents:docs,ai:50,assisted:0,human:50})]}),/disagree/);
+  assert.deepEqual(validateDataset({candidates:[analyzed({documents:docs.map(({words,...doc})=>doc),ai:25,assisted:0,human:75})]}).candidateReportConsistencyUnchecked,['one']);
+});

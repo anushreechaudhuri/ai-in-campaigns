@@ -17,7 +17,7 @@ def transfer(args):
            "/r2/buckets/ai-in-campaigns-data/objects/" + urllib.parse.quote(args.key, safe="/"))
     headers = {"Authorization": "Bearer " + token}
     if args.direction == "pull":
-        status, response_headers, body = request(url, headers=headers)
+        status, response_headers, body = request(url, headers=headers, public=False)
         if status != 200:
             raise ValueError(f"R2 download HTTP {status}")
         Path(args.file).parent.mkdir(parents=True, exist_ok=True)
@@ -31,7 +31,7 @@ def transfer(args):
         if len(body) > 16 * 1024 * 1024:
             raise ValueError("Upload exceeds bounded 16 MiB file limit")
         headers["Content-Type"] = "application/octet-stream"
-        status, _, response_body = request(url, headers=headers, method="PUT", data=body)
+        status, _, response_body = request(url, headers=headers, method="PUT", data=body, public=False)
         if status not in (200, 201):
             raise ValueError(f"R2 upload HTTP {status}")
         if json.loads(response_body).get("success") is not True:

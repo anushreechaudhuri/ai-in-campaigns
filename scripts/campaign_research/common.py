@@ -1,8 +1,11 @@
 """Small, dependency-free research I/O. Never logs credentials or response bodies."""
 import hashlib
+import http.client
 import ipaddress
 import json
+import re
 import socket
+import ssl
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -31,14 +34,41 @@ def read_json(path):
     return json.loads(Path(path).read_text(encoding="utf-8-sig"))
 
 
-def public_url(url):
+def public_target(url):
     p = urllib.parse.urlsplit(url)
     if p.scheme != "https" or not p.hostname or p.username or p.password or p.port not in (None, 443):
         raise ValueError("Only credential-free public HTTPS URLs on port 443 are accepted")
+    if "\\" in p.path or re.search(r"%(?:2f|5c)", p.path, re.I) or any(segment in (".", "..") for segment in urllib.parse.unquote(p.path).split("/")):
+        raise ValueError("Ambiguous source path requires manual review before robots evaluation")
     addresses = socket.getaddrinfo(p.hostname, 443, type=socket.SOCK_STREAM)
     if not addresses or any(not ipaddress.ip_address(a[4][0]).is_global for a in addresses):
         raise ValueError("Non-public network target refused")
-    return urllib.parse.urlunsplit((p.scheme, p.netloc, p.path or "/", p.query, ""))
+    return urllib.parse.urlunsplit((p.scheme, p.netloc, p.path or "/", p.query, "")), addresses
+
+
+def public_url(url):
+    return public_target(url)[0]
+
+
+class VettedHTTPSConnection(http.client.HTTPSConnection):
+    """Connect to the vetted socket address; verify TLS against the original host."""
+    def __init__(self, hostname, addresses):
+        super().__init__(hostname, port=443, timeout=25, context=ssl.create_default_context())
+        self.addresses = addresses
+
+    def connect(self):
+        last_error = None
+        for family, socktype, protocol, _, address in self.addresses:
+            candidate = socket.socket(family, socktype, protocol)
+            try:
+                candidate.settimeout(self.timeout)
+                candidate.connect(address)
+                self.sock = self._context.wrap_socket(candidate, server_hostname=self.host)
+                return
+            except OSError as error:
+                candidate.close()
+                last_error = error
+        raise last_error or OSError("No vetted address is available")
 
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -48,7 +78,26 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
 
 def request(url, *, headers=None, max_bytes=MAX_BYTES, method="GET", data=None, public=True):
     if public:
-        url = public_url(url)
+        url, addresses = public_target(url)
+        parsed = urllib.parse.urlsplit(url)
+        proxies = urllib.request.getproxies()
+        if (proxies.get("https") or proxies.get("all")) and not urllib.request.proxy_bypass(parsed.hostname):
+            # A generic CONNECT proxy chooses the origin address itself. Do not bypass
+            # proxy policy or claim that local DNS validation constrains its connection.
+            raise ValueError("Public capture requires vetted egress; configured HTTPS proxy cannot be bypassed")
+        connection = VettedHTTPSConnection(parsed.hostname, addresses)
+        try:
+            target = urllib.parse.urlunsplit(("", "", parsed.path or "/", parsed.query, ""))
+            connection.request(method, target, body=data, headers={"User-Agent": USER_AGENT, **(headers or {})})
+            with connection.getresponse() as response:
+                body = response.read(max_bytes + 1)
+                if len(body) > max_bytes:
+                    raise ValueError("Response exceeds configured byte limit")
+                return response.status, dict(response.headers), body
+        finally:
+            connection.close()
+    # Only fixed, trusted provider API URLs use this route, preserving configured
+    # proxy handling. It is not exposed as an option to campaign/snapshot callers.
     req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT, **(headers or {})}, method=method, data=data)
     try:
         response = urllib.request.build_opener(NoRedirect()).open(req, timeout=25)

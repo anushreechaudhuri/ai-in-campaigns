@@ -3,10 +3,10 @@ import csv
 import json
 import time
 import urllib.parse
-import urllib.robotparser
 from html.parser import HTMLParser
 from pathlib import Path
 from .common import USER_AGENT, digest, get_header, now, public_url, request, write_json
+from .robots import RobotsPolicy
 
 
 class Links(HTMLParser):
@@ -40,25 +40,21 @@ class Collector:
             robot_path = f"robots/{digest(body)}.txt"
             (self.out / robot_path).write_bytes(body)
             receipt["path"] = robot_path
-            parser = urllib.robotparser.RobotFileParser()
             if status == 404:
-                parser.parse([])
+                parser = RobotsPolicy("", USER_AGENT)
             elif status == 200:
                 robot_text = body.decode("utf-8", "replace")
                 if "<html" in robot_text.lower() or "<!doctype html" in robot_text.lower():
                     raise ValueError("robots.txt returned HTML; manual review required")
-                parser.parse(robot_text.splitlines())
+                parser = RobotsPolicy(robot_text, USER_AGENT)
             else:
                 # Redirects, auth, throttling, and errors fail closed.
                 raise ValueError(f"robots.txt HTTP {status}; manual review required")
             self.robots[origin] = (parser, receipt)
         parser, receipt = self.robots[origin]
-        if not parser.can_fetch(USER_AGENT, url):
+        if not parser.can_fetch(url):
             raise ValueError("robots.txt disallows capture")
-        delay = parser.crawl_delay(USER_AGENT) or parser.crawl_delay("*") or self.delay
-        rate = parser.request_rate(USER_AGENT) or parser.request_rate("*")
-        if rate:
-            delay = max(delay, rate.seconds / rate.requests)
+        delay = max(parser.delay, self.delay)
         if delay > 30:
             raise ValueError("robots crawl delay exceeds this bounded job; manual review required")
         self.sleep(max(self.delay, delay))

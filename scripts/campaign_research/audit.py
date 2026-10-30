@@ -11,8 +11,8 @@ ALIASES = {
     "candidate_id": ["candidate_id", "candidate_url", "ballotpedia_url", "Candidate URL", "Ballotpedia Candidate URL", "candidateUrl", "ballotpedia"],
     "name": ["name", "Candidate", "Candidate Name", "Name"],
     "website": ["website", "campaign_website", "Campaign Website", "Campaign website", "Website"],
-    "status": ["status", "Status"],
-    "primary": ["primary", "primary_status", "Primary", "Primary Result", "Primary Election Result"],
+    "status": ["status", "Status", "General election"],
+    "primary": ["primary", "primary_status", "Primary", "Primary Result", "Primary result", "Primary Election Result"],
     "state": ["state", "State"], "chamber": ["chamber", "Chamber"],
     "district": ["district", "District"], "dashboard_id": ["dashboard_id"],
     "status_as_of": ["status_as_of", "Status as of"],
@@ -77,7 +77,7 @@ def build_audit(rows, dataset, manifests, corpus_root=None):
             records = records + evidence[candidate["dashboard_id"]]
         checked, metadata, invalid = [], [], []
         for record in records:
-            if record.get("status") != "captured" or record.get("kind") not in ("campaign_page", "policy_pdf"):
+            if record.get("status") != "captured" or record.get("kind") not in ("campaign_page", "campaign_pdf", "policy_pdf"):
                 continue
             if not record.get("captured_at") or not re.fullmatch(r"[a-f0-9]{64}", str(record.get("sha256", ""))) or not record.get("source_url"):
                 invalid.append("incomplete_source_receipt")
@@ -94,7 +94,7 @@ def build_audit(rows, dataset, manifests, corpus_root=None):
                     body = inside(corpus_root, record["path"]).read_bytes()
                     if digest(body) != record["sha256"]:
                         invalid.append("checksum_mismatch")
-                    elif (record["kind"] == "policy_pdf" and not body.startswith(b"%PDF-")) or not body or (record["kind"] == "campaign_page" and not re.search(rb"<(?:!doctype\s+html|html|head|body|main|article|div|p)[\s>]", body[:65536], re.I)):
+                    elif (record["kind"] in ("campaign_pdf", "policy_pdf") and not body.startswith(b"%PDF-")) or not body or (record["kind"] == "campaign_page" and not re.search(rb"<(?:!doctype\s+html|html|head|body|main|article|div|p)[\s>]", body[:65536], re.I)):
                         invalid.append("invalid_source_bytes")
                     else:
                         checked.append(record)
@@ -122,6 +122,7 @@ def build_audit(rows, dataset, manifests, corpus_root=None):
                        "dashboard_id": str((match or {}).get("id", candidate["dashboard_id"])),
                        "join_method": join_method, "preservation": preservation,
                        "verified_campaign_pages": sum(r["kind"] == "campaign_page" for r in checked),
+                       "verified_campaign_pdfs": sum(r["kind"] == "campaign_pdf" for r in checked),
                        "verified_policy_pdfs": sum(r["kind"] == "policy_pdf" for r in checked),
                        "manifest_only_sources": len(metadata), "evidence_errors": ";".join(invalid),
                        "latest_capture": max((r["captured_at"] for r in checked), default="", key=lambda value: datetime.fromisoformat(value.replace("Z", "+00:00"))),

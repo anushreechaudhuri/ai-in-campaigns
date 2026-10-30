@@ -3,6 +3,7 @@ import argparse
 import csv
 import json
 import sys
+import socket
 import tempfile
 import unittest
 from pathlib import Path
@@ -11,7 +12,8 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 from campaign_research.audit import audit, build_audit, inventory
 from campaign_research.capture import Collector
-from campaign_research.common import digest, inside, public_url
+from campaign_research.common import digest, inside, public_url, public_target, VettedHTTPSConnection, request
+from campaign_research.robots import RobotsPolicy
 from campaign_research.storage import transfer, upload_run
 from research import snapshot
 
@@ -41,6 +43,10 @@ class AuditTests(unittest.TestCase):
             repeated = build_audit([candidate()], {}, [record, {**record, "captured_at": "2026-10-30T01:00:00+00:00"}], root)[0]
             self.assertEqual(repeated["verified_policy_pdfs"], 1)
             self.assertEqual(repeated["latest_capture"], "2026-10-30T01:00:00+00:00")
+            unreviewed = build_audit([candidate()], {}, [{**record, "kind": "campaign_pdf"}], root)[0]
+            self.assertEqual(unreviewed["preservation"], "verified_source_bytes")
+            self.assertEqual(unreviewed["verified_campaign_pdfs"], 1)
+            self.assertEqual(unreviewed["verified_policy_pdfs"], 0)
             Path(root, "policy.pdf").write_bytes(b"altered")
             bad = build_audit([candidate()], {}, [record], root)[0]
             self.assertEqual(bad["preservation"], "unknown")
@@ -73,6 +79,17 @@ class AuditTests(unittest.TestCase):
 
 
 class CaptureTests(unittest.TestCase):
+    def test_robots_longest_match_and_wildcards_prevent_fetch(self):
+        for rules in [b"User-agent: *\nAllow: /\nDisallow: /private/\n", b"User-agent: *\nDisallow: /*.pdf$\n"]:
+            requests = []
+            def transport(url, **kwargs):
+                requests.append(url)
+                return 200, {}, rules
+            with self.subTest(rules=rules), tempfile.TemporaryDirectory() as root, patch("campaign_research.capture.public_url", side_effect=lambda u: u):
+                with self.assertRaisesRegex(ValueError, "disallows"):
+                    Collector(root, transport=transport, sleeper=lambda _: None).capture(dict(candidate_id="a", source_url="https://example.org/private/policy.pdf"))
+            self.assertEqual(requests, ["https://example.org/robots.txt"])
+
     def test_robots_denial_prevents_source_fetch(self):
         requests = []
         def transport(url, **kwargs):
@@ -125,6 +142,23 @@ class CaptureTests(unittest.TestCase):
 
 
 class BoundaryTests(unittest.TestCase):
+    def test_connection_uses_vetted_dns_and_original_tls_hostname(self):
+        public = (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 443))
+        private = (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("127.0.0.1", 443))
+        with patch("campaign_research.common.socket.getaddrinfo", side_effect=[[public], [private]]) as dns, patch("campaign_research.common.socket.socket") as make_socket, patch("campaign_research.common.ssl.create_default_context") as context:
+            _, addresses = public_target("https://campaign.example/policy")
+            connection = VettedHTTPSConnection("campaign.example", addresses)
+            connection.connect()
+            dns.assert_called_once()
+            make_socket.return_value.connect.assert_called_once_with(public[4])
+            context.return_value.wrap_socket.assert_called_once_with(make_socket.return_value, server_hostname="campaign.example")
+
+    def test_proxy_cannot_be_bypassed_for_public_capture(self):
+        with patch("campaign_research.common.public_target", return_value=("https://campaign.example/policy", [])), patch("campaign_research.common.urllib.request.getproxies", return_value={"https": "http://proxy.example:8080"}), patch("campaign_research.common.urllib.request.proxy_bypass", return_value=False), patch("campaign_research.common.VettedHTTPSConnection") as connection:
+            with self.assertRaisesRegex(ValueError, "cannot be bypassed"):
+                request("https://campaign.example/policy")
+            connection.assert_not_called()
+
     def test_failed_snapshot_has_receipt_and_no_substitute_dataset(self):
         with tempfile.TemporaryDirectory() as root, patch("research.fetch_public", side_effect=ValueError("Public fetch returned HTTP 403")):
             with self.assertRaisesRegex(ValueError, "403"):
@@ -145,7 +179,7 @@ class BoundaryTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as root:
             with self.assertRaises(ValueError):
                 inside(root, "../outside")
-        for url in ["http://example.org", "https://u:p@example.org", "https://127.0.0.1", "https://[::1]"]:
+        for url in ["http://example.org", "https://u:p@example.org", "https://127.0.0.1", "https://[::1]", "https://example.org/public/../private", "https://example.org/%2e%2e/private", "https://example.org/private%2Fpolicy.pdf"]:
             with self.subTest(url=url), self.assertRaises(ValueError):
                 public_url(url)
 
@@ -179,6 +213,29 @@ class BoundaryTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     upload_run(argparse.Namespace(root=root, key_prefix="private/cloud-runs/test"))
             self.assertFalse(Path(root, "run-manifest.json").exists())
+
+
+class RobotsTests(unittest.TestCase):
+    def test_longest_allow_and_equal_length_allow_tie(self):
+        policy = RobotsPolicy("User-agent: *\nAllow: /private/public/\nDisallow: /private/\nDisallow: /same\nAllow: /same\n", "CampaignPreservationAudit/1.0")
+        self.assertFalse(policy.can_fetch("https://example.org/private/policy"))
+        self.assertTrue(policy.can_fetch("https://example.org/private/public/policy"))
+        self.assertTrue(policy.can_fetch("https://example.org/same"))
+
+    def test_specific_groups_merge_without_wildcard_fallback(self):
+        policy = RobotsPolicy("User-agent: *\nDisallow: /\nUser-agent: CampaignPreservationAudit\nDisallow: /one\nUser-agent: CampaignPreservationAudit\nDisallow: /two\nCrawl-delay: 4\nRequest-rate: 1/6\n", "CampaignPreservationAudit/1.0")
+        self.assertFalse(policy.can_fetch("https://example.org/one"))
+        self.assertFalse(policy.can_fetch("https://example.org/two"))
+        self.assertTrue(policy.can_fetch("https://example.org/other"))
+        self.assertEqual(policy.delay, 6)
+
+    def test_percent_normalization_wildcard_anchors_and_literal_query(self):
+        policy = RobotsPolicy("User-agent: *\nDisallow: /%70rivate\nDisallow: /*.pdf$\nDisallow: /search?q=\n", "CampaignPreservationAudit/1.0")
+        self.assertFalse(policy.can_fetch("https://example.org/private"))
+        self.assertFalse(policy.can_fetch("https://example.org/one/two.pdf"))
+        self.assertTrue(policy.can_fetch("https://example.org/one.pdf?download=1"))
+        self.assertFalse(policy.can_fetch("https://example.org/search?q=abc"))
+        self.assertTrue(policy.can_fetch("https://example.org/searchXq=abc"))
 
 
 if __name__ == "__main__":
