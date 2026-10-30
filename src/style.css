@@ -17,3 +17,5 @@
 .ai-cell[data-classification="Human"]{--category-color:var(--human);--category-ink:var(--human-ink)}
 .ai-cell[data-classification="Mixed"]{--category-color:var(--mixed);--category-ink:var(--mixed-ink)}
 .ai-cell[data-classification="AI"]{--category-color:var(--ai);--category-ink:var(--ai-ink)}
+
+.market-chance{display:inline-flex;align-items:center;justify-content:flex-end;gap:5px;color:#315e71;font-variant-numeric:tabular-nums;text-decoration:underline;text-underline-offset:3px}.market-chance:hover{color:#253746}.market-chance svg{width:12px;height:12px;fill:none;stroke:currentColor;stroke-width:1.7}
