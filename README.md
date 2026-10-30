@@ -21,7 +21,10 @@ The source repository contains application code and asset references. Campaign d
 
 The public catalog points to an immutable, content-addressed dataset and reports. Upload referenced objects before replacing the catalog. Previous datasets and original scans remain preserved. The published dataset retains missing-analysis statuses and separate campaign/document records. Word weighting excludes missing analyses.
 
+Install the Cloudflare CLI before deploying:
+
 ```sh
+npm install -g wrangler
 wrangler whoami
 npm run deploy
 ```
