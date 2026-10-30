@@ -19,6 +19,10 @@
     {
       "pattern": "midterms-ai.org",
       "custom_domain": true
+    },
+    {
+      "pattern": "www.midterms-ai.org",
+      "custom_domain": true
     }
   ]
 }
