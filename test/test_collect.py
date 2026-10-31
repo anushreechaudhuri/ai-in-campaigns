@@ -13,6 +13,24 @@ from campaign_research.common import ReadFailure
 
 
 class CollectTests(unittest.TestCase):
+    def test_footer_policies_do_not_displace_campaign_issues_with_a_small_page_limit(self):
+        calls = []
+        legal = ('merchant-policies', 'return-and-refund-policy', 'text-policy', 'messaging-policy')
+        def transport(url, **kwargs):
+            calls.append(url)
+            if url.endswith('/robots.txt'):
+                return 404, {}, b''
+            links = ''.join(f'<a href="/{slug}">{slug}</a>' for slug in legal)
+            html = '<html>' + links + '<a href="/issues">Issues</a><a href="/issues/messaging-policy">Policy on government messaging</a></html>' if url.endswith('/') else '<html>Campaign position</html>'
+            return 200, {'Content-Type': 'text/html'}, html.encode()
+        with tempfile.TemporaryDirectory() as root, patch('campaign_research.capture.public_url', side_effect=lambda u: u):
+            Path(root, 'checkpoints').mkdir()
+            state = process_candidate(Engine(root, 100000, 100, transport=transport, sleeper=lambda _: None), {'candidate_id': 'https://ballotpedia.org/Example', 'name': 'Example', 'website': 'https://campaign.example/'}, 3, 0)
+            self.assertIn('https://campaign.example/issues', calls)
+            self.assertIn('https://campaign.example/issues/messaging-policy', calls)
+            self.assertFalse(any('https://campaign.example/' + slug in calls for slug in legal))
+            self.assertEqual(state['status'], 'success')
+
     def test_utf16_bom_policy_links_are_followed_after_html_acceptance(self):
         calls = []
         def transport(url, **kwargs):

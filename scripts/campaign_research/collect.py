@@ -15,7 +15,7 @@ from .capture import Collector
 from .common import MAX_BYTES, decode_html, digest, inside, now, read_json, request, write_json
 
 POLICY = re.compile(r"\b(issues?|polic(?:y|ies)|priorities|platform|agenda|vision|positions?|plans?|stand(?:s|ing)?)\b", re.I)
-EXCLUDE = re.compile(r"privacy[-_/ ]+policy|cookie|terms[-_/ ]+(?:of|and|conditions|service)|/(?:donate|volunteer|press|news|blog|events?)(?:/|$)", re.I)
+EXCLUDE = re.compile(r"privacy[-_/ ]+policy|cookie|terms[-_/ ]+(?:of|and|conditions|service)|/(?:donate|volunteer|press|news|blog|events?)(?:/|$)|(?:^|\s)/(?:merchant-policies|return-and-refund-policy|text-policy|messaging-policy)(?:/|$)", re.I)
 
 
 class Anchors(HTMLParser):
