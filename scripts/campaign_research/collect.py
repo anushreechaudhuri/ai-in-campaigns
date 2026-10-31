@@ -171,7 +171,8 @@ def process_candidate(engine, candidate, max_pages, max_pdfs, supplemental=None)
                 return state
         site = campaign_url(site)
         state["resolved_website"] = site
-        queue, seen, pdfs = [(site, False, "Declared campaign website")], set(), []
+        policy_start = bool(POLICY.search(urllib.parse.urlsplit(site).path) and not EXCLUDE.search(urllib.parse.urlsplit(site).path))
+        queue, seen, pdfs = [(site, policy_start, "Explicit candidate-linked campaign/policy URL")], set(), []
         pages = page_attempts = 0
         while queue and page_attempts < max_pages and not engine.exhausted:
             url, is_policy, context = queue.pop(0)
