@@ -99,3 +99,36 @@ class MergeTests(unittest.TestCase):
             (root / 'a/run-config.json').symlink_to(outside)
             with self.assertRaisesRegex(ValueError, 'symlink'):
                 module.merge(inventory, [('run1', root / 'a')], root / 'out')
+
+    def test_discovery_outcomes_keep_verified_index_without_inflating_coverage(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            inventory = root / 'inventory.json'
+            inventory.write_text(json.dumps({'candidates': [{'candidate_id': 'candidate1'}]}))
+            source = root / 'reference'
+            source.mkdir()
+            body = b'[]'
+            (source / 'index.json').write_bytes(body)
+            state = {'candidate_id': 'candidate1', 'status': 'no_matching_archived_reference_in_date_range',
+                     'index_path': 'index.json', 'index_sha256': hashlib.sha256(body).hexdigest()}
+            (source / 'discovery-results.json').write_text(json.dumps([state]))
+            summary = module.merge(inventory, [('reference', source)], root / 'out')
+            self.assertEqual(summary['candidate_ids_with_captured_bytes'], 0)
+            self.assertEqual(summary['discovery_attempts'], 1)
+            row = json.loads((root / 'out/coverage-ledger.json').read_text())['candidates'][0]
+            copied = row['discovery_attempts'][0]
+            self.assertEqual((root / 'out' / copied['index_path']).read_bytes(), body)
+            (source / 'index.json').write_bytes(b'tampered')
+            with self.assertRaisesRegex(ValueError, 'index checksum'):
+                module.merge(inventory, [('reference', source)], root / 'tampered-out')
+
+    def test_discovery_outcome_unknown_identity_is_rejected(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            inventory = root / 'inventory.json'
+            inventory.write_text(json.dumps({'candidates': [{'candidate_id': 'candidate1'}]}))
+            source = root / 'reference'
+            source.mkdir()
+            (source / 'discovery-results.json').write_text(json.dumps([{'candidate_id': 'other'}]))
+            with self.assertRaisesRegex(ValueError, 'Discovery candidate absent'):
+                module.merge(inventory, [('reference', source)], root / 'out')

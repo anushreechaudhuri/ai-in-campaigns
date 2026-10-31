@@ -26,43 +26,72 @@ def merge(inventory, runs, out):
     for run_id, root in runs:
         root = Path(root)
         if not root.is_dir() or not any((root / marker).exists() for marker in (
-                'captures.jsonl', 'checkpoints', 'attempts.json', 'verification.json')):
+                'captures.jsonl', 'checkpoints', 'attempts.json', 'verification.json', 'discovery-results.json')):
             raise ValueError('Explicit run input is missing or has no capture/checkpoint evidence: ' + run_id)
     out.mkdir(parents=True)
     candidates = {r['candidate_id']: r for r in rows}
     records, attempts, failures = {}, collections.defaultdict(list), []
+    discovery = collections.defaultdict(list)
     input_count = 0
     for run_id, root in runs:
         root = Path(root)
         metadata = out / 'run-metadata' / run_id
         metadata.mkdir(parents=True)
         for filename in ('input-public-seed.json', 'run-config.json', 'source-note.json',
-                         'verification.json', 'capture-summary.json', 'collect-summary.json'):
+                         'verification.json', 'capture-summary.json', 'collect-summary.json', 'summary.json'):
             if (root / filename).is_symlink():
                 raise ValueError('Run metadata symlink refused')
             if (root / filename).is_file():
                 shutil.copyfile(inside(root, filename), metadata / filename)
+        discovery_path = root / 'discovery-results.json'
+        if discovery_path.is_symlink():
+            raise ValueError('Discovery metadata symlink refused')
+        if discovery_path.exists():
+            checked_discovery = []
+            for original in read_json(discovery_path):
+                state = dict(original)
+                if state.get('candidate_id') not in candidates:
+                    raise ValueError('Discovery candidate absent from canonical inventory')
+                if state.get('index_path') or state.get('index_sha256'):
+                    if not state.get('index_path') or not re.fullmatch(r'[a-f0-9]{64}', str(state.get('index_sha256', ''))):
+                        raise ValueError('Discovery index receipt is incomplete')
+                    source = inside(root, state['index_path'])
+                    body = source.read_bytes()
+                    if hashlib.sha256(body).hexdigest() != state['index_sha256']:
+                        raise ValueError('Discovery index checksum mismatch')
+                    destination = metadata / 'discovery-objects' / (state['index_sha256'] + '.json')
+                    destination.parent.mkdir(exist_ok=True)
+                    shutil.copyfile(source, destination)
+                    state['index_path'] = str(destination.relative_to(out))
+                state['run_id'] = run_id
+                discovery[state['candidate_id']].append(state)
+                checked_discovery.append(state)
+            write_json(metadata / 'discovery-results.json', checked_discovery)
         for checkpoint in sorted((root / 'checkpoints').glob('*.json')):
             state = read_json(checkpoint)
+            if state.get('candidate_id') not in candidates:
+                raise ValueError('Checkpoint candidate absent from canonical inventory')
             attempts[state['candidate_id']].append({
                 'run_id': run_id, **{k: state.get(k) for k in (
                     'status', 'started_at', 'finished_at', 'errors', 'resolved_website',
                     'website_evidence', 'policy_pages', 'policy_pdf_candidates', 'scope_complete')}})
         if (root / 'attempts.json').exists():
             for state in read_json(root / 'attempts.json'):
+                if state.get('candidate_id') not in candidates:
+                    raise ValueError('Attempt candidate absent from canonical inventory')
                 attempts[state['candidate_id']].append({'run_id': run_id, **state})
         manifest = root / 'captures.jsonl'
         if not manifest.exists():
             continue
         for line in manifest.read_text().splitlines():
             record = json.loads(line)
+            if record.get('candidate_id') not in candidates:
+                raise ValueError('Captured candidate absent from canonical inventory')
             if record.get('status') != 'captured':
                 failures.append({'run_id': run_id, **record})
                 attempts[record['candidate_id']].append({'run_id': run_id, **record})
                 continue
             input_count += 1
-            if record['candidate_id'] not in candidates:
-                raise ValueError('Captured candidate absent from canonical inventory')
             path = inside(root, record['path'])
             body = path.read_bytes()
             sha = hashlib.sha256(body).hexdigest()
@@ -125,12 +154,14 @@ def merge(inventory, runs, out):
                        'campaign_response_count': len(campaign), 'reference_response_count': len(reference),
                        'unusable_response_count': sum(not r['source_content_valid'] for r in captured),
                        'distinct_source_urls': len({r['source_url'] for r in captured}),
-                       'pdf_candidate_count': sum(r['path'].endswith('.pdf') for r in captured),
+                       'pdf_candidate_count': sum(r['path'].endswith('.pdf') for r in campaign),
+                       'reference_pdf_count': sum(r['path'].endswith('.pdf') for r in reference),
                        'unreviewed_source_context_receipts': len(context_receipts),
                        'source_bytes_preserved': bool(campaign), 'reference_bytes_preserved': bool(reference),
                        'current_candidate_site_identity': 'requires_review',
                        'policy_content_completeness': 'not_established',
                        'attempts': history,
+                       'discovery_attempts': discovery[cid],
                        'discovery_access_restricted': any('robots.txt HTTP 202' in str(a.get('errors', [])) for a in history),
                        'coverage_note': 'Captured bytes do not prove current campaign identity, policy completeness, or AI authorship.'})
     write_json(out / 'coverage-ledger.json', {'created_at': now(),
@@ -143,6 +174,7 @@ def merge(inventory, runs, out):
     unusable = [r for r in values if not r['source_content_valid']]
     write_json(out / 'unusable-response-receipts.json', unusable)
     campaign_ids = {r['candidate_id'] for r in values if r['kind'] in ('campaign_page', 'campaign_pdf', 'policy_pdf') and r['source_content_valid']}
+    campaign_paths = {r['path'] for r in values if r['kind'] in ('campaign_page', 'campaign_pdf', 'policy_pdf') and r['source_content_valid']}
     summary = {'created_at': now(), 'canonical_candidates': len(candidates),
                'input_success_receipts': input_count, 'deduplicated_receipts': len(values),
                'candidate_ids_with_captured_bytes': len(campaign_ids),
@@ -150,6 +182,9 @@ def merge(inventory, runs, out):
                'coverage_counting_basis': 'Campaign page/PDF source bytes only; reference pages and detector reports excluded',
                'unusable_response_receipts': len(unusable),
                'unique_bodies': len(objects), 'unique_body_bytes': sum(p.stat().st_size for p in objects),
+               'unique_usable_campaign_body_bytes': sum((out / p).stat().st_size for p in campaign_paths),
+               'discovery_attempts': sum(map(len, discovery.values())),
+               'discovery_statuses': dict(collections.Counter(r.get('status', 'unspecified') for history in discovery.values() for r in history)),
                'response_kinds': dict(collections.Counter(r['kind'] for r in values)),
                'scope_complete': False, 'runs': [r[0] for r in runs]}
     write_json(out / 'merge-summary.json', summary)
