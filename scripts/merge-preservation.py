@@ -4,6 +4,7 @@ import argparse
 import collections
 import hashlib
 import json
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -18,6 +19,9 @@ def merge(inventory, runs, out):
     ids = [r.get('candidate_id') for r in rows]
     if any(not isinstance(cid, str) or not cid.strip() for cid in ids) or len(set(ids)) != len(ids):
         raise ValueError('Canonical inventory requires unique nonempty candidate IDs')
+    run_ids = [run_id for run_id, _ in runs]
+    if len(set(run_ids)) != len(run_ids) or any(not re.fullmatch(r'[A-Za-z0-9_-]+', run_id) for run_id in run_ids):
+        raise ValueError('Run IDs must be unique simple identifiers')
     for run_id, root in runs:
         root = Path(root)
         if not root.is_dir() or not any((root / marker).exists() for marker in (

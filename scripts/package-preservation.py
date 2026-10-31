@@ -12,11 +12,16 @@ from campaign_research.common import inside, write_json
 
 
 def package(root, out, max_bytes=20_000_000):
-    root, out = Path(root), Path(out)
+    root, out = Path(root).resolve(), Path(out)
     if out.exists():
         raise ValueError('Use a new delivery directory')
     out.mkdir(parents=True)
     records = [json.loads(line) for line in (root / 'captures.jsonl').read_text().splitlines()]
+    for record in records:
+        record['path'] = str(inside(root, record['path']).relative_to(root))
+        for observation in [record] + record.get('observations', []):
+            for check in observation.get('robots_checks', []):
+                check['path'] = str(inside(root, check['path']).relative_to(root))
     note = ('Private campaign source preservation archive. Each numbered archive is independently extractable.\n'
             'captures.jsonl contains source URLs, times, SHA-256 hashes and run observations.\n'
             'objects/ contains response bodies; robots/ contains corresponding policy receipts.\n'
