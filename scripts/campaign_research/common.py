@@ -18,6 +18,33 @@ USER_AGENT = "CampaignPreservationAudit/1.0 (+https://github.com/anushreechaudhu
 MAX_BYTES = 16 * 1024 * 1024
 
 
+class ReadFailure(ValueError):
+    def __init__(self, message, bytes_read=0):
+        super().__init__(message)
+        self.bytes_read = bytes_read
+
+
+def read_response(response, max_bytes):
+    body = bytearray()
+    read_size = 0
+    try:
+        while len(body) <= max_bytes:
+            read_size = min(65536, max_bytes + 1 - len(body))
+            chunk = (getattr(response, "read1", None) or response.read)(read_size)
+            if not chunk:
+                break
+            body.extend(chunk)
+    except Exception as error:
+        partial = getattr(error, "partial", None)
+        # A failed read can consume bytes without returning them. Charge its bounded
+        # size conservatively when the transport cannot report a precise partial.
+        consumed = len(partial) if isinstance(partial, bytes) else read_size
+        raise ReadFailure("Response read failed: " + type(error).__name__, len(body) + consumed) from None
+    if len(body) > max_bytes:
+        raise ReadFailure("Response exceeds configured byte limit", len(body))
+    return bytes(body)
+
+
 def now():
     return datetime.now(timezone.utc).isoformat()
 
@@ -108,9 +135,7 @@ def request(url, *, headers=None, max_bytes=MAX_BYTES, method="GET", data=None, 
             target = urllib.parse.urlunsplit(("", "", parsed.path or "/", parsed.query, ""))
             connection.request(method, target, body=data, headers={"User-Agent": USER_AGENT, **(headers or {})})
             with connection.getresponse() as response:
-                body = response.read(max_bytes + 1)
-                if len(body) > max_bytes:
-                    raise ValueError("Response exceeds configured byte limit")
+                body = read_response(response, max_bytes)
                 return response.status, dict(response.headers), body
         finally:
             connection.close()
@@ -123,9 +148,7 @@ def request(url, *, headers=None, max_bytes=MAX_BYTES, method="GET", data=None, 
         # Preserve status/redirect location without leaking server bodies or bearer tokens.
         response = error
     with response:
-        body = response.read(max_bytes + 1)
-        if len(body) > max_bytes:
-            raise ValueError("Response exceeds configured byte limit")
+        body = read_response(response, max_bytes)
         return response.status, dict(response.headers), body
 
 

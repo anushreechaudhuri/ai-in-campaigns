@@ -76,6 +76,8 @@ class Collector:
                 raise ValueError(f"Source HTTP {status}; no capture accepted")
             content_type = get_header(headers, "content-type").split(";")[0].lower()
             is_pdf = body.startswith(b"%PDF-")
+            if is_pdf and row.get("allow_pdf") is False:
+                raise ValueError("PDF response exceeds candidate PDF cap; sniffed body not retained")
             if not is_pdf and any(marker in body.lower() for marker in (b"/cdn-cgi/challenge-platform/", b"cf-chl-", b"<title>just a moment", b"<title>access denied")):
                 raise ValueError("Source returned an access-control page; manual review required")
             if not is_pdf and content_type not in ("text/html", "application/xhtml+xml"):

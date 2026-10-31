@@ -5,13 +5,14 @@ import re
 import threading
 import time
 import urllib.parse
+import uuid
 from collections import Counter, defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from html.parser import HTMLParser
 from pathlib import Path
 from .audit import inventory
 from .capture import Collector
-from .common import digest, inside, now, read_json, request, write_json
+from .common import MAX_BYTES, digest, inside, now, read_json, request, write_json
 
 POLICY = re.compile(r"\b(issues?|polic(?:y|ies)|priorities|platform|agenda|vision|positions?|plans?|stand(?:s|ing)?)\b", re.I)
 EXCLUDE = re.compile(r"privacy[-_/ ]+policy|cookie|terms[-_/ ]+(?:of|and|conditions|service)|/(?:donate|volunteer|press|news|blog|events?)(?:/|$)", re.I)
@@ -58,9 +59,11 @@ class Engine(Collector):
     def __init__(self, out, max_bytes, max_requests, transport=request, sleeper=time.sleep):
         self.gates = defaultdict(threading.RLock)
         self.times = {}
+        self.delays = {}
         self.failures = {}
         self.state_lock = threading.Lock()
-        self.requests = self.downloaded = 0
+        self.requests = self.downloaded = self.reserved = 0
+        self.identity = None
         self.max_bytes, self.max_requests = max_bytes, max_requests
         self.exhausted = False
         self.upstream, self.sleeper = transport, sleeper
@@ -70,19 +73,28 @@ class Engine(Collector):
         host = origin(url)
         with self.gates[host]:
             with self.state_lock:
-                if self.exhausted or self.requests >= self.max_requests:
+                available = self.max_bytes - self.downloaded - self.reserved
+                if self.exhausted or self.requests >= self.max_requests or available <= 0:
                     self.exhausted = True
                     raise ValueError("Acquisition request/byte budget exhausted")
                 self.requests += 1
-            self.sleeper(max(0, self.times.get(host, 0) + 2 - time.monotonic()))
+                reservation = min(kwargs.get("max_bytes", MAX_BYTES) + 1, available)
+                self.reserved += reservation
+            self.sleeper(max(0, self.times.get(host, 0) + self.delays.get(host, 2) - time.monotonic()))
             self.times[host] = time.monotonic()
-            result = self.upstream(url, **kwargs)
-            with self.state_lock:
-                self.downloaded += len(result[2])
-                if self.downloaded > self.max_bytes:
-                    self.exhausted = True
-                    raise ValueError("Acquisition byte budget exhausted")
-            return result
+            used = 0
+            try:
+                result = self.upstream(url, **{**kwargs, "max_bytes": reservation - 1})
+                used = len(result[2])
+                return result
+            except Exception as error:
+                used = getattr(error, "bytes_read", 0)
+                raise
+            finally:
+                with self.state_lock:
+                    self.reserved -= reservation
+                    self.downloaded += used
+                    self.exhausted |= self.downloaded >= self.max_bytes
 
     def allowed(self, url):
         host = origin(url)
@@ -90,16 +102,20 @@ class Engine(Collector):
             if host in self.failures:
                 raise ValueError(self.failures[host])
             try:
-                return super().allowed(url)
+                receipt = super().allowed(url)
+                robot_origin = urllib.parse.urlunsplit((*urllib.parse.urlsplit(url)[:2], "", "", ""))
+                self.delays[host] = max(2, self.robots[robot_origin][0].delay)
+                return receipt
             except Exception as error:
                 reason = str(error) if isinstance(error, ValueError) else type(error).__name__
-                self.failures[host] = reason
+                if reason != "robots.txt disallows capture":
+                    self.failures[host] = reason
                 raise ValueError(reason) from None
 
-    def acquire(self, cid, url, kind, records, context=""):
+    def acquire(self, cid, url, kind, records, context="", allow_pdf=True):
         if origin(url) in self.failures:
             raise ValueError(self.failures[origin(url)])
-        record, _ = self.capture({"candidate_id": cid, "source_url": url, "kind": kind})
+        record, _ = self.capture({"candidate_id": cid, "source_url": url, "kind": kind, "allow_pdf": allow_pdf})
         if kind == "reference_page":
             record["kind"] = kind
         record["policy_context"] = context
@@ -119,7 +135,8 @@ def process_candidate(engine, candidate, max_pages, max_pdfs, supplemental=None)
     state = {"candidate_id": cid, "name": candidate["name"], "seed_website": candidate["website"],
              "started_at": now(), "status": "pending", "records": [], "errors": [],
              "policy_pages": 0, "policy_pdf_candidates": 0, "scope_complete": False,
-             "attempt": candidate.get("_attempt", 1)}
+             "attempt": candidate.get("_attempt", 1), "input_config_identity": engine.identity,
+             "unexpected_pdf_responses_skipped": 0}
     records = state["records"]
     site = candidate["website"] or (supplemental or {}).get(candidate["name"].casefold(), "")
     if site and not candidate["website"]:
@@ -130,7 +147,7 @@ def process_candidate(engine, candidate, max_pages, max_pdfs, supplemental=None)
             return state
         if not site:
             try:
-                record, body = engine.acquire(cid, cid, "reference_page", records, "Campaign website discovery from canonical candidate page")
+                record, body = engine.acquire(cid, cid, "reference_page", records, "Campaign website discovery from canonical candidate page", allow_pdf=False)
                 for href, label in Anchors(body).links:
                     if re.search(r"(?:official\s+)?campaign\s+(?:web)?site|campaign\s+website", label, re.I):
                         proposed = urllib.parse.urljoin(record["final_url"], href)
@@ -156,8 +173,10 @@ def process_candidate(engine, candidate, max_pages, max_pdfs, supplemental=None)
             seen.add(url)
             page_attempts += 1
             try:
-                record, body = engine.acquire(cid, url, "campaign_page", records, context)
+                record, body = engine.acquire(cid, url, "campaign_page", records, context, allow_pdf=state["policy_pdf_candidates"] < max_pdfs)
             except Exception as error:
+                if isinstance(error, ValueError) and str(error).startswith("PDF response exceeds candidate PDF cap"):
+                    state["unexpected_pdf_responses_skipped"] += 1
                 state["errors"].append({"url": url, "reason": str(error) if isinstance(error, ValueError) else type(error).__name__})
                 continue
             if record["kind"] != "campaign_page":
@@ -176,9 +195,12 @@ def process_candidate(engine, candidate, max_pages, max_pdfs, supplemental=None)
                         pdfs.append((target, record["final_url"]))
                 elif POLICY.search(label + " " + parsed.path) and target not in seen:
                     queue.append((target, True, "Policy/issues link from " + record["final_url"]))
-        for url, parent in list(dict(pdfs).items())[:max_pdfs]:
+        for url, parent in list(dict(pdfs).items())[:max_pdfs - state["policy_pdf_candidates"]]:
             if engine.exhausted:
                 break
+            if url in seen:
+                continue
+            seen.add(url)
             try:
                 engine.acquire(cid, url, "campaign_pdf", records, "Unreviewed PDF linked from policy context " + parent)
                 state["policy_pdf_candidates"] += 1
@@ -190,8 +212,10 @@ def process_candidate(engine, candidate, max_pages, max_pdfs, supplemental=None)
             state["status"] = "budget_exhausted"
         elif not campaign_records:
             state["status"] = "capture_failed"
+        elif state["errors"] or state["unvisited_policy_links"]:
+            state["status"] = "partial"
         elif state["policy_pages"] or state["policy_pdf_candidates"]:
-            state["status"] = "partial" if state["errors"] or state["unvisited_policy_links"] else "success"
+            state["status"] = "success"
         else:
             state["status"] = "no_policy_found_in_bounded_scan"
         return state
@@ -219,17 +243,32 @@ def collect(args):
         data = read_json(args.dataset).get("candidates", [])
         published_counts = Counter(r.get("name", "").casefold() for r in data)
         supplemental = {r["name"].casefold(): r["website"] for r in data if r.get("website") and counts[r["name"].casefold()] == published_counts[r["name"].casefold()] == 1}
-    write_json(out / "run-config.json", {"started_at": now(), "input_sha256": digest(Path(args.inventory).read_bytes()),
+    config = {"input_sha256": digest(Path(args.inventory).read_bytes()),
                "candidate_count": len(rows), "workers": args.workers, "max_pages": args.max_pages,
                "max_pdfs": args.max_pdfs, "max_mib": args.max_mib, "max_requests": args.max_requests,
                "dataset_sha256": digest(Path(args.dataset).read_bytes()) if args.dataset else None,
-               "limitations": "A bounded scan and PDF link heuristic do not prove complete policy coverage. No detector requests."})
+               "code_sha256": {p.name: digest(p.read_bytes()) for p in Path(__file__).parent.glob("*.py")}}
+    engine.identity = digest(json.dumps(config, sort_keys=True).encode())
+    config["identity"] = engine.identity
+    config_path = out / "run-config.json"
+    if config_path.exists():
+        if read_json(config_path).get("identity") != engine.identity:
+            raise ValueError("Existing output has different input/config/code; use a fresh output directory")
+    else:
+        write_json(config_path, config)
+    invocation = {"id": uuid.uuid4().hex, "started_at": now(), "config_identity": engine.identity,
+                  "budget_scope": "This invocation only; previous invocation receipts are retained",
+                  "limitations": "A bounded scan and PDF link heuristic do not prove complete policy coverage. No detector requests."}
+    invocation_path = out / "invocations" / (invocation["id"] + ".json")
+    write_json(invocation_path, invocation)
     results = {}
     pending = []
     for row in rows:
         checkpoint = out / "checkpoints" / (digest(row["candidate_id"].encode()) + ".json")
         if checkpoint.exists():
             previous = read_json(checkpoint)
+            if previous.get("input_config_identity") != engine.identity:
+                raise ValueError("Checkpoint identity disagrees with immutable run config")
             if args.retry_failures and previous["status"] in ("discovery_failed", "capture_failed", "budget_exhausted", "partial") and previous.get("attempt", 1) < 2:
                 pending.append({**row, "_attempt": previous.get("attempt", 1) + 1})
             else:
@@ -239,9 +278,11 @@ def collect(args):
     def save():
         summary = {"updated_at": now(), "intended": len(rows), "completed": len(results),
                    "counts": dict(Counter(r["status"] for r in results.values())),
-                   "network_requests": engine.requests, "network_response_bytes": engine.downloaded,
-                   "budget_exhausted": engine.exhausted, "scoring_requests": 0}
+                   "network_requests": engine.requests, "response_body_budget_bytes_charged": engine.downloaded,
+                   "budget_exhausted": engine.exhausted, "scoring_requests": 0,
+                   "invocation_id": invocation["id"], "budget_scope": "current invocation response bodies; failed reads charged conservatively"}
         write_json(out / "summary.json", summary)
+        write_json(invocation_path, {**invocation, "latest_summary": summary})
         print(json.dumps(summary), flush=True)
     with ThreadPoolExecutor(max_workers=args.workers) as pool:
         futures = {pool.submit(process_candidate, engine, row, args.max_pages, args.max_pdfs, supplemental): row for row in pending}
