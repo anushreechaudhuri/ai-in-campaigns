@@ -1,0 +1,41 @@
+name: Check acquisition egress and existing storage access
+on:
+  push:
+    branches: [cloud-preservation-audit]
+    paths: [.github/workflows/acquisition-access.yml]
+permissions:
+  contents: read
+jobs:
+  access:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.RESEARCH_R2_API_TOKEN || secrets.CLOUDFLARE_API_TOKEN }}
+      INVENTORY_KEY: ${{ vars.CANDIDATE_INVENTORY_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Check public egress and existing credentials without exposing secrets
+        run: |
+          python - <<'PY'
+          import os, sys, json
+          sys.path.insert(0, 'scripts')
+          from campaign_research.common import request
+          report = {'r2_token_available': bool(os.environ.get('CLOUDFLARE_API_TOKEN')), 'inventory_key_configured': bool(os.environ.get('INVENTORY_KEY'))}
+          try:
+              status, _, body = request('https://ballotpedia.org/robots.txt', max_bytes=512*1024)
+              report['public_egress_http_status'] = status
+              report['public_egress_response_bytes'] = len(body)
+          except Exception as error:
+              report['public_egress_error'] = str(error) if isinstance(error, ValueError) else type(error).__name__
+          if report['r2_token_available']:
+              try:
+                  status, _, body = request('https://api.cloudflare.com/client/v4/accounts/e84fe353569d25772e1018a57e090b26/r2/buckets/ai-in-campaigns-data', headers={'Authorization':'Bearer '+os.environ['CLOUDFLARE_API_TOKEN']}, public=False)
+                  report['existing_r2_bucket_http_status'] = status
+                  report['existing_r2_bucket_access'] = status == 200 and json.loads(body).get('success') is True
+              except Exception as error:
+                  report['existing_r2_bucket_error'] = type(error).__name__
+          print(json.dumps(report, sort_keys=True))
+          PY
