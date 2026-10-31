@@ -115,8 +115,10 @@ def build_audit(rows, dataset, manifests, corpus_root=None):
         preservation = "verified_source_bytes" if checked else "manifest_only" if metadata else "unknown"
         if checked:
             action, priority = "review_policy_scope_and_link_completeness", 5
-        elif metadata or invalid:
+        elif metadata or any(reason != "reviewed_unrelated_response" for reason in invalid):
             action, priority = "verify_manifest_objects", 1 if risky else 3
+        elif invalid:
+            action, priority = "find_alternative_campaign_source", 1 if risky else 3
         elif website:
             action, priority = "preserve_known_website", 1 if risky else 3
         else:

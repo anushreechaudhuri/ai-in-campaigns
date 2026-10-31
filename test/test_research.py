@@ -50,10 +50,14 @@ class AuditTests(unittest.TestCase):
             excluded = build_audit([candidate()], {}, [{**record, 'source_scope_excluded': True}], root)[0]
             self.assertEqual(excluded['preservation'], 'unknown')
             self.assertEqual(excluded['evidence_errors'], 'reviewed_unrelated_response')
+            self.assertEqual(excluded['next_action'], 'find_alternative_campaign_source')
             Path(root, "policy.pdf").write_bytes(b"altered")
             bad = build_audit([candidate()], {}, [record], root)[0]
             self.assertEqual(bad["preservation"], "unknown")
             self.assertEqual(bad["evidence_errors"], "checksum_mismatch")
+            self.assertEqual(bad['next_action'], 'verify_manifest_objects')
+            mixed = build_audit([candidate()], {}, [record, {**record, 'source_scope_excluded': True}], root)[0]
+            self.assertEqual(mixed['next_action'], 'verify_manifest_objects')
 
     def test_ambiguous_identity_is_never_joined(self):
         duplicate = dict(name="Jane Doe", state="ME", chamber="House", district="1", documents=[{}])
