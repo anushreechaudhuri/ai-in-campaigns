@@ -30,10 +30,21 @@ class Collector:
     def allowed(self, url):
         origin = urllib.parse.urlunsplit((*urllib.parse.urlsplit(url)[:2], "", "", ""))
         if origin not in self.robots:
-            self.sleep(self.delay)
             checked_at = now()
-            status, headers, body = self.transport(origin + "/robots.txt", max_bytes=512 * 1024)
+            robots_url, redirects = origin + "/robots.txt", []
+            for hop in range(6):
+                self.sleep(self.delay)
+                status, headers, body = self.transport(robots_url, max_bytes=512 * 1024)
+                if status not in (301, 302, 303, 307, 308):
+                    break
+                target = public_url(urllib.parse.urljoin(robots_url, get_header(headers, "location")))
+                redirects.append({"from": robots_url, "to": target, "status": status,
+                                  "checked_at": now(), "sha256": digest(body)})
+                robots_url = target
+            else:
+                raise ValueError("robots.txt redirect limit; manual review required")
             receipt = {"url": origin + "/robots.txt", "checked_at": checked_at,
+                       "final_url": robots_url, "redirects": redirects,
                        "status": status, "sha256": digest(body)}
             self.out.mkdir(parents=True, exist_ok=True)
             (self.out / "robots").mkdir(exist_ok=True)
@@ -48,7 +59,7 @@ class Collector:
                     raise ValueError("robots.txt returned HTML; manual review required")
                 parser = RobotsPolicy(robot_text, USER_AGENT)
             else:
-                # Redirects, auth, throttling, and errors fail closed.
+                # Auth, throttling, ambiguous responses, and errors fail closed.
                 raise ValueError(f"robots.txt HTTP {status}; manual review required")
             self.robots[origin] = (parser, receipt)
         parser, receipt = self.robots[origin]

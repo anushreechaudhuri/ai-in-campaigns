@@ -58,6 +58,10 @@ def campaign_url(value):
 class Engine(Collector):
     def __init__(self, out, max_bytes, max_requests, transport=request, sleeper=time.sleep):
         self.gates = defaultdict(threading.RLock)
+        # Keep policy-cache locks separate from transport locks. A normal robots
+        # redirect may cross origins; holding a transport lock across that request
+        # could deadlock two opposite redirects.
+        self.policy_gates = defaultdict(threading.RLock)
         self.times = {}
         self.delays = {}
         self.failures = {}
@@ -105,7 +109,7 @@ class Engine(Collector):
 
     def allowed(self, url):
         host = origin(url)
-        with self.gates[host]:
+        with self.policy_gates[host]:
             if host in self.failures:
                 raise ValueError(self.failures[host])
             try:

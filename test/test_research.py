@@ -80,6 +80,37 @@ class AuditTests(unittest.TestCase):
 
 
 class CaptureTests(unittest.TestCase):
+    def test_normal_robots_redirect_preserves_rules_and_denials(self):
+        for rules in [b'User-agent: *\nAllow: /\n', b'User-agent: *\nDisallow: /issues\n']:
+            calls = []
+            def transport(url, **kwargs):
+                calls.append(url)
+                if url == 'https://example.org/robots.txt':
+                    return 301, {'Location': 'https://www.example.org/robots.txt'}, b''
+                if url.endswith('/robots.txt'):
+                    return 200, {}, rules
+                return 200, {'Content-Type': 'text/html'}, b'<html>issues</html>'
+            with tempfile.TemporaryDirectory() as root, patch('campaign_research.capture.public_url', side_effect=lambda u: u):
+                collector = Collector(root, transport=transport, sleeper=lambda _: None)
+                if b'Disallow' in rules:
+                    with self.assertRaisesRegex(ValueError, 'disallows'):
+                        collector.capture({'candidate_id': 'a', 'source_url': 'https://example.org/issues'})
+                    self.assertNotIn('https://example.org/issues', calls)
+                else:
+                    record, _ = collector.capture({'candidate_id': 'a', 'source_url': 'https://example.org/issues'})
+                    self.assertEqual(record['robots_checks'][0]['final_url'], 'https://www.example.org/robots.txt')
+                    self.assertEqual(len(record['robots_checks'][0]['redirects']), 1)
+
+    def test_robots_redirect_to_access_denial_still_stops(self):
+        calls = []
+        def transport(url, **kwargs):
+            calls.append(url)
+            return (302, {'Location': '/blocked'}, b'') if url.endswith('/robots.txt') else (403, {}, b'forbidden')
+        with tempfile.TemporaryDirectory() as root, patch('campaign_research.capture.public_url', side_effect=lambda u: u):
+            with self.assertRaisesRegex(ValueError, 'robots.txt HTTP 403'):
+                Collector(root, transport=transport, sleeper=lambda _: None).capture({'candidate_id': 'a', 'source_url': 'https://example.org/issues'})
+        self.assertNotIn('https://example.org/issues', calls)
+
     def test_robots_longest_match_and_wildcards_prevent_fetch(self):
         for rules in [b"User-agent: *\nAllow: /\nDisallow: /private/\n", b"User-agent: *\nDisallow: /*.pdf$\n"]:
             requests = []
