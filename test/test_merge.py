@@ -132,3 +132,28 @@ class MergeTests(unittest.TestCase):
             (source / 'discovery-results.json').write_text(json.dumps([{'candidate_id': 'other'}]))
             with self.assertRaisesRegex(ValueError, 'Discovery candidate absent'):
                 module.merge(inventory, [('reference', source)], root / 'out')
+
+    def test_checksum_bound_scope_review_retains_bytes_excludes_unrelated_response(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            inventory = root / 'inventory.json'
+            inventory.write_text(json.dumps({'candidates': [{'candidate_id': 'candidate1'}]}))
+            record = self.fixture(root / 'a')
+            review = root / 'review.json'
+            decision = {'candidate_id': 'candidate1', 'sha256': record['sha256'],
+                        'decision': 'unrelated_response', 'reason': 'Repurposed domain, unrelated organization'}
+            review.write_text(json.dumps({'decisions': [decision]}))
+            summary = module.merge(inventory, [('run1', root / 'a')], root / 'out', review)
+            self.assertEqual(summary['candidate_ids_with_captured_bytes'], 0)
+            self.assertEqual(summary['scope_excluded_response_receipts'], 1)
+            self.assertEqual(summary['unique_bodies'], 1)
+            self.assertEqual(summary['unique_usable_campaign_body_bytes'], 0)
+            second = module.merge(inventory, [('old', root / 'a'), ('reviewed', root / 'out')], root / 'second')
+            self.assertEqual(second['candidate_ids_with_captured_bytes'], 0)
+            self.assertEqual(second['scope_excluded_response_receipts'], 1)
+            third = module.merge(inventory, [('reviewed', root / 'out')], root / 'third')
+            self.assertEqual(third['candidate_ids_with_captured_bytes'], 0)
+            decision['sha256'] = '0' * 64
+            review.write_text(json.dumps({'decisions': [decision]}))
+            with self.assertRaisesRegex(ValueError, 'does not match'):
+                module.merge(inventory, [('run1', root / 'a')], root / 'unmatched', review)

@@ -11,7 +11,7 @@ from pathlib import Path
 from campaign_research.common import has_html_markup, inside, now, read_json, write_json
 
 
-def merge(inventory, runs, out):
+def merge(inventory, runs, out, scope_review=None):
     out = Path(out)
     if out.exists():
         raise ValueError("Use a new output directory to preserve prior audit snapshots")
@@ -30,6 +30,16 @@ def merge(inventory, runs, out):
             raise ValueError('Explicit run input is missing or has no capture/checkpoint evidence: ' + run_id)
     out.mkdir(parents=True)
     candidates = {r['candidate_id']: r for r in rows}
+    decisions = {}
+    if scope_review:
+        for item in read_json(scope_review)['decisions']:
+            key = (item.get('candidate_id'), item.get('sha256'))
+            if (key[0] not in candidates or not re.fullmatch(r'[a-f0-9]{64}', str(key[1]))
+                    or item.get('decision') != 'unrelated_response' or not str(item.get('reason', '')).strip()
+                    or key in decisions):
+                raise ValueError('Invalid or duplicate scope review decision')
+            decisions[key] = item
+    applied_decisions = set()
     records, attempts, failures = {}, collections.defaultdict(list), []
     discovery = collections.defaultdict(list)
     input_count = 0
@@ -99,6 +109,19 @@ def merge(inventory, runs, out):
                 raise ValueError('Source body checksum/length mismatch')
             record['source_content_valid'] = (has_html_markup(body) if record['kind'] == 'campaign_page'
                 else body.startswith(b'%PDF-') if record['kind'] in ('campaign_pdf', 'policy_pdf') else bool(body))
+            review_key = (record['candidate_id'], sha)
+            if record.get('source_scope_excluded') or record.get('scope_review'):
+                inherited = record.get('scope_review')
+                if (not isinstance(inherited, dict) or inherited.get('candidate_id') != review_key[0]
+                        or inherited.get('sha256') != review_key[1]
+                        or inherited.get('decision') != 'unrelated_response'
+                        or not str(inherited.get('reason', '')).strip()):
+                    raise ValueError('Inherited scope exclusion requires a matching checksum-bound review')
+                decisions.setdefault(review_key, inherited)
+            record['source_scope_excluded'] = review_key in decisions
+            if review_key in decisions:
+                record['scope_review'] = decisions[review_key]
+                applied_decisions.add(review_key)
             if not record['source_content_valid']:
                 record['content_validation_error'] = 'Response bytes do not match declared campaign HTML/PDF content'
             extension = '.pdf' if body.startswith(b'%PDF-') else '.html'
@@ -126,7 +149,20 @@ def merge(inventory, runs, out):
                            'redirects': record.get('redirects', [])}
             if observation not in records[key]['observations']:
                 records[key]['observations'].append(observation)
+    if applied_decisions != set(decisions):
+        raise ValueError('Scope review decision does not match any preserved response')
     values = sorted(records.values(), key=lambda r: (r['candidate_id'], r['source_url'], r['sha256']))
+    # A review in a later input applies to all identical preserved bytes, including
+    # an earlier deduplicated receipt from a source run that predates the review.
+    for record in values:
+        review_key = (record['candidate_id'], record['sha256'])
+        record['source_scope_excluded'] = review_key in decisions
+        if review_key in decisions:
+            record['scope_review'] = decisions[review_key]
+    if decisions:
+        write_json(out / 'scope-review.json', {
+            'input_sha256': hashlib.sha256(Path(scope_review).read_bytes()).hexdigest() if scope_review else None,
+            'decisions': list(decisions.values()), 'inherited_exclusions_preserved': True})
     (out / 'captures.jsonl').write_text(''.join(json.dumps(r) + '\n' for r in values))
     write_json(out / 'failed-captures.json', failures)
     by_candidate = collections.defaultdict(list)
@@ -146,13 +182,14 @@ def merge(inventory, runs, out):
     ledger = []
     for cid, candidate in candidates.items():
         captured = by_candidate[cid]
-        campaign = [r for r in captured if r['kind'] in ('campaign_page', 'campaign_pdf', 'policy_pdf') and r['source_content_valid']]
+        campaign = [r for r in captured if r['kind'] in ('campaign_page', 'campaign_pdf', 'policy_pdf') and r['source_content_valid'] and not r['source_scope_excluded']]
         reference = [r for r in captured if r['kind'] not in ('campaign_page', 'campaign_pdf', 'policy_pdf')]
         history = attempts[cid]
         context_receipts = [r for r in campaign if any(o.get('policy_context') for o in r['observations'])]
         ledger.append({**candidate, 'verified_response_count': len(captured),
                        'campaign_response_count': len(campaign), 'reference_response_count': len(reference),
                        'unusable_response_count': sum(not r['source_content_valid'] for r in captured),
+                       'scope_excluded_response_count': sum(r['source_scope_excluded'] for r in captured),
                        'distinct_source_urls': len({r['source_url'] for r in captured}),
                        'pdf_candidate_count': sum(r['path'].endswith('.pdf') for r in campaign),
                        'reference_pdf_count': sum(r['path'].endswith('.pdf') for r in reference),
@@ -173,14 +210,17 @@ def merge(inventory, runs, out):
     objects = list((out / 'objects').glob('*')) if (out / 'objects').exists() else []
     unusable = [r for r in values if not r['source_content_valid']]
     write_json(out / 'unusable-response-receipts.json', unusable)
-    campaign_ids = {r['candidate_id'] for r in values if r['kind'] in ('campaign_page', 'campaign_pdf', 'policy_pdf') and r['source_content_valid']}
-    campaign_paths = {r['path'] for r in values if r['kind'] in ('campaign_page', 'campaign_pdf', 'policy_pdf') and r['source_content_valid']}
+    write_json(out / 'scope-excluded-receipts.json', [r for r in values if r['source_scope_excluded']])
+    campaign = [r for r in values if r['kind'] in ('campaign_page', 'campaign_pdf', 'policy_pdf') and r['source_content_valid'] and not r['source_scope_excluded']]
+    campaign_ids = {r['candidate_id'] for r in campaign}
+    campaign_paths = {r['path'] for r in campaign}
     summary = {'created_at': now(), 'canonical_candidates': len(candidates),
                'input_success_receipts': input_count, 'deduplicated_receipts': len(values),
                'candidate_ids_with_captured_bytes': len(campaign_ids),
                'candidate_ids_without_captured_bytes': len(candidates) - len(campaign_ids),
                'coverage_counting_basis': 'Campaign page/PDF source bytes only; reference pages and detector reports excluded',
                'unusable_response_receipts': len(unusable),
+               'scope_excluded_response_receipts': sum(r['source_scope_excluded'] for r in values),
                'unique_bodies': len(objects), 'unique_body_bytes': sum(p.stat().st_size for p in objects),
                'unique_usable_campaign_body_bytes': sum((out / p).stat().st_size for p in campaign_paths),
                'discovery_attempts': sum(map(len, discovery.values())),
@@ -199,5 +239,6 @@ if __name__ == '__main__':
     parser.add_argument('--inventory', required=True)
     parser.add_argument('--run', action='append', required=True, help='RUN_ID=CAPTURE_DIRECTORY')
     parser.add_argument('--out', required=True)
+    parser.add_argument('--scope-review', help='Private checksum-bound review decisions excluding unrelated responses')
     args = parser.parse_args()
-    print(json.dumps(merge(args.inventory, [r.split('=', 1) for r in args.run], args.out)))
+    print(json.dumps(merge(args.inventory, [r.split('=', 1) for r in args.run], args.out, args.scope_review)))

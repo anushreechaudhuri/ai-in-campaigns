@@ -47,6 +47,9 @@ class AuditTests(unittest.TestCase):
             self.assertEqual(unreviewed["preservation"], "verified_source_bytes")
             self.assertEqual(unreviewed["verified_campaign_pdfs"], 1)
             self.assertEqual(unreviewed["verified_policy_pdfs"], 0)
+            excluded = build_audit([candidate()], {}, [{**record, 'source_scope_excluded': True}], root)[0]
+            self.assertEqual(excluded['preservation'], 'unknown')
+            self.assertEqual(excluded['evidence_errors'], 'reviewed_unrelated_response')
             Path(root, "policy.pdf").write_bytes(b"altered")
             bad = build_audit([candidate()], {}, [record], root)[0]
             self.assertEqual(bad["preservation"], "unknown")

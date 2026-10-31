@@ -79,6 +79,9 @@ def build_audit(rows, dataset, manifests, corpus_root=None):
         for record in records:
             if record.get("status") != "captured" or record.get("kind") not in ("campaign_page", "campaign_pdf", "policy_pdf"):
                 continue
+            if record.get('source_scope_excluded'):
+                invalid.append('reviewed_unrelated_response')
+                continue
             if not record.get("captured_at") or not re.fullmatch(r"[a-f0-9]{64}", str(record.get("sha256", ""))) or not record.get("source_url"):
                 invalid.append("incomplete_source_receipt")
                 continue
