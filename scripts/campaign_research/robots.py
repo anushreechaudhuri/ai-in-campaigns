@@ -27,7 +27,7 @@ class RobotsPolicy:
             field, separator, value = line.split("#", 1)[0].partition(":")
             if not separator:
                 continue
-            field, value = field.strip().lower(), value.strip()
+            field, value = field.strip().lstrip('\ufeff').lower(), value.strip()
             if field == "user-agent":
                 if directives:
                     groups.append((agents, directives))

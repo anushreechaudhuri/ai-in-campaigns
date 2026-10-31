@@ -63,6 +63,18 @@ class MergeTests(unittest.TestCase):
             self.assertTrue(row['reference_bytes_preserved'])
             self.assertFalse(row['source_bytes_preserved'])
 
+    def test_hash_valid_error_response_is_diagnostic_not_campaign_coverage(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            inventory = root / 'inventory.json'
+            inventory.write_text(json.dumps({'candidates': [{'candidate_id': 'candidate1'}]}))
+            self.fixture(root / 'a', b'An error has occurred.')
+            summary = module.merge(inventory, [('run1', root / 'a')], root / 'out')
+            self.assertEqual(summary['candidate_ids_with_captured_bytes'], 0)
+            self.assertEqual(summary['unusable_response_receipts'], 1)
+            self.assertEqual(len(json.loads((root / 'out/unusable-response-receipts.json').read_text())), 1)
+            self.assertEqual(len(list((root / 'out/objects').glob('*'))), 1)
+
     def test_rejects_duplicate_ids_and_missing_runs_before_creating_output(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)

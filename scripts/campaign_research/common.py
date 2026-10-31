@@ -53,6 +53,16 @@ def digest(body):
     return hashlib.sha256(body).hexdigest()
 
 
+def has_html_markup(body):
+    pattern = rb'<(?:!doctype\s+html|html|head|body|main|article|div|p)[\s>]'
+    if re.search(pattern, body[:65536], re.I):
+        return True
+    if body.startswith((b'\xff\xfe', b'\xfe\xff')):
+        text = body[:131072].decode('utf-16', 'replace')
+        return bool(re.search(pattern.decode(), text, re.I))
+    return False
+
+
 def atomic_write(path, body):
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)

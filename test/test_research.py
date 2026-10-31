@@ -80,6 +80,28 @@ class AuditTests(unittest.TestCase):
 
 
 class CaptureTests(unittest.TestCase):
+    def test_non_html_and_encoded_responses_are_not_accepted_as_campaign_pages(self):
+        for headers, body in [({'Content-Type': 'text/html'}, b'An error has occurred.'),
+                              ({'Content-Type': 'text/html', 'Content-Encoding': 'br'}, b'encoded')]:
+            def transport(url, **kwargs):
+                return (404, {}, b'') if url.endswith('/robots.txt') else (200, headers, body)
+            with self.subTest(headers=headers), tempfile.TemporaryDirectory() as root, patch('campaign_research.capture.public_url', side_effect=lambda u: u):
+                with self.assertRaises(ValueError):
+                    Collector(root, transport=transport, sleeper=lambda _: None).capture({'candidate_id': 'a', 'source_url': 'https://example.org/'})
+                self.assertFalse((Path(root) / 'objects').exists())
+
+    def test_bom_robots_rules_are_applied_and_unknown_encoding_stops(self):
+        for headers, body in [({}, b'\xef\xbb\xbfUser-agent: *\nDisallow: /\n'),
+                              ({'Content-Encoding': 'br'}, b'encoded')]:
+            calls = []
+            def transport(url, **kwargs):
+                calls.append(url)
+                return 200, headers, body
+            with tempfile.TemporaryDirectory() as root, patch('campaign_research.capture.public_url', side_effect=lambda u: u):
+                with self.assertRaises(ValueError):
+                    Collector(root, transport=transport, sleeper=lambda _: None).capture({'candidate_id': 'a', 'source_url': 'https://example.org/'})
+                self.assertEqual(calls, ['https://example.org/robots.txt'])
+
     def test_unreviewed_pdf_request_requires_pdf_signature(self):
         def transport(url, **kwargs):
             return (404, {}, b'') if url.endswith('/robots.txt') else (200, {'Content-Type': 'text/html'}, b'<html>Not a PDF</html>')

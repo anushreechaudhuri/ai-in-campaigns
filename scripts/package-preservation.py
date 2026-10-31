@@ -89,6 +89,8 @@ def package(root, out, max_bytes=20_000_000):
     with zipfile.ZipFile(coverage, 'w', compression=zipfile.ZIP_DEFLATED) as target:
         for filename in ('coverage-ledger.json', 'merge-summary.json', 'pdf-verification.json', 'failed-captures.json'):
             target.writestr(filename, read_checked(filename))
+        if (root / 'unusable-response-receipts.json').exists():
+            target.writestr('unusable-response-receipts.json', read_checked('unusable-response-receipts.json'))
         for path in sorted((root / 'run-metadata').rglob('*')):
             if path.is_symlink():
                 raise ValueError('Run metadata symlink refused')

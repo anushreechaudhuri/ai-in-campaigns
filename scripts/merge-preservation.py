@@ -8,7 +8,7 @@ import re
 import shutil
 import subprocess
 from pathlib import Path
-from campaign_research.common import inside, now, read_json, write_json
+from campaign_research.common import has_html_markup, inside, now, read_json, write_json
 
 
 def merge(inventory, runs, out):
@@ -68,6 +68,10 @@ def merge(inventory, runs, out):
             sha = hashlib.sha256(body).hexdigest()
             if sha != record['sha256'] or len(body) != record['bytes']:
                 raise ValueError('Source body checksum/length mismatch')
+            record['source_content_valid'] = (has_html_markup(body) if record['kind'] == 'campaign_page'
+                else body.startswith(b'%PDF-') if record['kind'] in ('campaign_pdf', 'policy_pdf') else bool(body))
+            if not record['source_content_valid']:
+                record['content_validation_error'] = 'Response bytes do not match declared campaign HTML/PDF content'
             extension = '.pdf' if body.startswith(b'%PDF-') else '.html'
             relative = 'objects/' + sha + extension
             target = out / relative
@@ -113,12 +117,13 @@ def merge(inventory, runs, out):
     ledger = []
     for cid, candidate in candidates.items():
         captured = by_candidate[cid]
-        campaign = [r for r in captured if r['kind'] in ('campaign_page', 'campaign_pdf', 'policy_pdf')]
-        reference = [r for r in captured if r not in campaign]
+        campaign = [r for r in captured if r['kind'] in ('campaign_page', 'campaign_pdf', 'policy_pdf') and r['source_content_valid']]
+        reference = [r for r in captured if r['kind'] not in ('campaign_page', 'campaign_pdf', 'policy_pdf')]
         history = attempts[cid]
         context_receipts = [r for r in campaign if any(o.get('policy_context') for o in r['observations'])]
         ledger.append({**candidate, 'verified_response_count': len(captured),
                        'campaign_response_count': len(campaign), 'reference_response_count': len(reference),
+                       'unusable_response_count': sum(not r['source_content_valid'] for r in captured),
                        'distinct_source_urls': len({r['source_url'] for r in captured}),
                        'pdf_candidate_count': sum(r['path'].endswith('.pdf') for r in captured),
                        'unreviewed_source_context_receipts': len(context_receipts),
@@ -135,12 +140,15 @@ def merge(inventory, runs, out):
                'candidates': ledger})
     write_json(out / 'pdf-verification.json', pdf_checks)
     objects = list((out / 'objects').glob('*')) if (out / 'objects').exists() else []
-    campaign_ids = {r['candidate_id'] for r in values if r['kind'] in ('campaign_page', 'campaign_pdf', 'policy_pdf')}
+    unusable = [r for r in values if not r['source_content_valid']]
+    write_json(out / 'unusable-response-receipts.json', unusable)
+    campaign_ids = {r['candidate_id'] for r in values if r['kind'] in ('campaign_page', 'campaign_pdf', 'policy_pdf') and r['source_content_valid']}
     summary = {'created_at': now(), 'canonical_candidates': len(candidates),
                'input_success_receipts': input_count, 'deduplicated_receipts': len(values),
                'candidate_ids_with_captured_bytes': len(campaign_ids),
                'candidate_ids_without_captured_bytes': len(candidates) - len(campaign_ids),
                'coverage_counting_basis': 'Campaign page/PDF source bytes only; reference pages and detector reports excluded',
+               'unusable_response_receipts': len(unusable),
                'unique_bodies': len(objects), 'unique_body_bytes': sum(p.stat().st_size for p in objects),
                'response_kinds': dict(collections.Counter(r['kind'] for r in values)),
                'scope_complete': False, 'runs': [r[0] for r in runs]}

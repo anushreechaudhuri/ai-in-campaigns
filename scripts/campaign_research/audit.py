@@ -5,7 +5,7 @@ import re
 from datetime import datetime
 from collections import Counter, defaultdict
 from pathlib import Path
-from .common import digest, inside, load_manifest, now, read_json, write_json
+from .common import digest, has_html_markup, inside, load_manifest, now, read_json, write_json
 
 ALIASES = {
     "candidate_id": ["candidate_id", "candidate_url", "ballotpedia_url", "Candidate URL", "Ballotpedia Candidate URL", "candidateUrl", "ballotpedia"],
@@ -94,7 +94,7 @@ def build_audit(rows, dataset, manifests, corpus_root=None):
                     body = inside(corpus_root, record["path"]).read_bytes()
                     if digest(body) != record["sha256"]:
                         invalid.append("checksum_mismatch")
-                    elif (record["kind"] in ("campaign_pdf", "policy_pdf") and not body.startswith(b"%PDF-")) or not body or (record["kind"] == "campaign_page" and not re.search(rb"<(?:!doctype\s+html|html|head|body|main|article|div|p)[\s>]", body[:65536], re.I)):
+                    elif (record["kind"] in ("campaign_pdf", "policy_pdf") and not body.startswith(b"%PDF-")) or not body or (record["kind"] == "campaign_page" and not has_html_markup(body)):
                         invalid.append("invalid_source_bytes")
                     else:
                         checked.append(record)

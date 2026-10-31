@@ -5,7 +5,7 @@ import time
 import urllib.parse
 from html.parser import HTMLParser
 from pathlib import Path
-from .common import USER_AGENT, atomic_write, digest, get_header, now, public_url, request, write_json
+from .common import USER_AGENT, atomic_write, digest, get_header, has_html_markup, now, public_url, request, write_json
 from .robots import RobotsPolicy
 
 
@@ -54,7 +54,12 @@ class Collector:
             if status == 404:
                 parser = RobotsPolicy("", USER_AGENT)
             elif status == 200:
-                robot_text = body.decode("utf-8", "replace")
+                if get_header(headers, 'content-encoding').lower() not in ('', 'identity'):
+                    raise ValueError('robots.txt content encoding requires review; no rules assumed')
+                try:
+                    robot_text = body.decode('utf-8-sig')
+                except UnicodeDecodeError:
+                    raise ValueError('robots.txt is not UTF-8; manual review required') from None
                 if "<html" in robot_text.lower() or "<!doctype html" in robot_text.lower():
                     raise ValueError("robots.txt returned HTML; manual review required")
                 parser = RobotsPolicy(robot_text, USER_AGENT)
@@ -85,7 +90,11 @@ class Collector:
                 continue
             if status != 200:
                 raise ValueError(f"Source HTTP {status}; no capture accepted")
-            content_type = get_header(headers, "content-type").split(";")[0].lower()
+            content_type_header = get_header(headers, 'content-type')
+            content_type = content_type_header.split(';')[0].strip().lower()
+            content_encoding = get_header(headers, 'content-encoding').lower()
+            if content_encoding not in ('', 'identity'):
+                raise ValueError('Source content encoding requires review; identity representation expected')
             is_pdf = body.startswith(b"%PDF-")
             if is_pdf and row.get("allow_pdf") is False:
                 raise ValueError("PDF response exceeds candidate PDF cap; sniffed body not retained")
@@ -93,6 +102,8 @@ class Collector:
                 raise ValueError("Source returned an access-control page; manual review required")
             if not is_pdf and content_type not in ("text/html", "application/xhtml+xml"):
                 raise ValueError("Only HTML or PDF campaign sources accepted")
+            if not is_pdf and not has_html_markup(body):
+                raise ValueError('Source did not return recognizable HTML; no campaign content accepted')
             if not body or ((row.get("kind") == "policy_pdf" or row.get("require_pdf")) and not is_pdf):
                 raise ValueError("Requested policy PDF did not return PDF bytes")
             sha = digest(body)
@@ -104,6 +115,7 @@ class Collector:
                       "final_url": url, "status": "captured", "captured_at": captured_at,
                       "kind": ("policy_pdf" if row.get("kind") == "policy_pdf" else "campaign_pdf") if is_pdf else "campaign_page", "path": relative,
                       "sha256": sha, "bytes": len(body), "content_type": content_type,
+                      "content_type_header": content_type_header, 'content_encoding': content_encoding,
                       "etag": get_header(headers, "etag"), "last_modified": get_header(headers, "last-modified"),
                       "robots_checks": checks, "redirects": redirects,
                       "scope": "single_response_body; embedded assets not captured"}
