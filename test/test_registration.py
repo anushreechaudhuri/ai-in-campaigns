@@ -26,6 +26,21 @@ class RegistrationTests(unittest.TestCase):
                     'https://www.fec.gov:8443/data/candidate/H6CA01001/'):
             self.assertEqual(authorizing_candidate_ids(f'<a href="{url}">Authorizing candidate</a>'), [])
 
+    def test_truncated_authorizing_markup_cannot_make_two_ids_look_unique(self):
+        body = ('<a href="/data/candidate/H6CA01001/">Authorizing candidate</a>'
+                '<a href="/data/candidate/H6CA01002/">Authorizing candidate')
+        self.assertEqual(authorizing_candidate_ids(body), [])
+
+    def test_nested_authorizing_anchors_are_held(self):
+        body = ('<a href="/data/candidate/H6CA01001/">Authorizing candidate'
+                '<a href="/data/candidate/H6CA01002/">Authorizing candidate</a></a>')
+        self.assertEqual(authorizing_candidate_ids(body), [])
+
+    def test_script_and_style_text_do_not_establish_a_link_label(self):
+        for tag in ('script', 'style'):
+            body = f'<a href="/data/candidate/H6CA01001/">Other candidate<{tag}>Authorizing candidate</{tag}></a>'
+            self.assertEqual(authorizing_candidate_ids(body), [])
+
     def test_uppercase_and_bare_website_fields_are_read_without_email_domains(self):
         text = """COMMITTEE'S E-MAIL ADDRESS
 TEAM@EXAMPLE.ORG

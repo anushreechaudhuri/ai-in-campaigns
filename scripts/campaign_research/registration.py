@@ -20,17 +20,28 @@ def authorizing_candidate_ids(body):
             self.href = None
             self.label = []
             self.ids = set()
+            self.anchor_open = False
+            self.malformed = False
+            self.ignored = 0
 
         def handle_starttag(self, tag, attrs):
+            if tag in ('script', 'style'):
+                self.ignored += 1
+                return
             if tag == 'a':
+                self.malformed |= self.anchor_open
+                self.anchor_open = True
                 self.href = dict(attrs).get('href')
                 self.label = []
 
         def handle_data(self, data):
-            if self.href is not None:
+            if self.href is not None and not self.ignored:
                 self.label.append(data)
 
         def handle_endtag(self, tag):
+            if tag in ('script', 'style'):
+                self.ignored = max(0, self.ignored - 1)
+                return
             if tag != 'a':
                 return
             if self.href is not None and re.search(r'\bauthorizing\s+candidates?\b', ' '.join(self.label), re.I):
@@ -45,10 +56,13 @@ def authorizing_candidate_ids(body):
                     self.ids.add(match.group(1))
             self.href = None
             self.label = []
+            self.anchor_open = False
 
     parser = AuthorizingLinks()
     parser.feed(body.decode('utf-8', errors='replace') if isinstance(body, bytes) else body)
     parser.close()
+    if parser.malformed or parser.anchor_open or parser.ignored:
+        return []
     return sorted(parser.ids)
 
 
