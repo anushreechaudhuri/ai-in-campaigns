@@ -15,7 +15,8 @@ def merge(inventory, runs, out):
     out = Path(out)
     if out.exists():
         raise ValueError("Use a new output directory to preserve prior audit snapshots")
-    rows = read_json(inventory)['candidates']
+    source_inventory = read_json(inventory)
+    rows = source_inventory['candidates']
     ids = [r.get('candidate_id') for r in rows]
     if any(not isinstance(cid, str) or not cid.strip() for cid in ids) or len(set(ids)) != len(ids):
         raise ValueError('Canonical inventory requires unique nonempty candidate IDs')
@@ -37,8 +38,10 @@ def merge(inventory, runs, out):
         metadata.mkdir(parents=True)
         for filename in ('input-public-seed.json', 'run-config.json', 'source-note.json',
                          'verification.json', 'capture-summary.json', 'collect-summary.json'):
+            if (root / filename).is_symlink():
+                raise ValueError('Run metadata symlink refused')
             if (root / filename).is_file():
-                shutil.copyfile(root / filename, metadata / filename)
+                shutil.copyfile(inside(root, filename), metadata / filename)
         for checkpoint in sorted((root / 'checkpoints').glob('*.json')):
             state = read_json(checkpoint)
             attempts[state['candidate_id']].append({
@@ -122,7 +125,11 @@ def merge(inventory, runs, out):
                        'attempts': history,
                        'discovery_access_restricted': any('robots.txt HTTP 202' in str(a.get('errors', [])) for a in history),
                        'coverage_note': 'Captured bytes do not prove current campaign identity, policy completeness, or AI authorship.'})
-    write_json(out / 'coverage-ledger.json', {'created_at': now(), 'candidates': ledger})
+    write_json(out / 'coverage-ledger.json', {'created_at': now(),
+               'inventory_sha256': hashlib.sha256(Path(inventory).read_bytes()).hexdigest(),
+               'inventory_provenance': source_inventory.get('provenance', {}),
+               'status_note': 'Supplied election statuses are not refreshed by capture; source file modified time is not a status verification date.',
+               'candidates': ledger})
     write_json(out / 'pdf-verification.json', pdf_checks)
     objects = list((out / 'objects').glob('*')) if (out / 'objects').exists() else []
     summary = {'created_at': now(), 'canonical_candidates': len(candidates),

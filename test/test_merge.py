@@ -61,3 +61,15 @@ class MergeTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'run input is missing'):
                 module.merge(inventory, [('run1', root / 'absent')], root / 'out')
             self.assertFalse((root / 'out').exists())
+
+    def test_rejects_metadata_symlink(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            inventory = root / 'inventory.json'
+            inventory.write_text(json.dumps({'candidates': [{'candidate_id': 'candidate1'}]}))
+            self.fixture(root / 'a')
+            outside = root / 'outside.json'
+            outside.write_text('{"private":true}')
+            (root / 'a/run-config.json').symlink_to(outside)
+            with self.assertRaisesRegex(ValueError, 'symlink'):
+                module.merge(inventory, [('run1', root / 'a')], root / 'out')

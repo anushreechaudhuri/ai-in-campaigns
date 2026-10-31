@@ -50,3 +50,22 @@ class PackageTests(unittest.TestCase):
             (root / 'captures.jsonl').write_text(json.dumps({'path': '../outside'}) + '\n')
             with self.assertRaises(ValueError):
                 module.package(root, Path(temp) / 'out')
+
+    def test_tampered_source_and_metadata_symlinks_are_rejected(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / 'corpus'
+            root.mkdir()
+            (root / 'body.html').write_bytes(b'changed')
+            record = {'path': 'body.html', 'sha256': hashlib.sha256(b'original').hexdigest()}
+            (root / 'captures.jsonl').write_text(json.dumps(record) + '\n')
+            with self.assertRaisesRegex(ValueError, 'checksum/length'):
+                module.package(root, Path(temp) / 'tampered-out')
+            (root / 'captures.jsonl').write_text('')
+            for filename in ('coverage-ledger.json', 'merge-summary.json', 'pdf-verification.json', 'failed-captures.json'):
+                (root / filename).write_text('{}')
+            (root / 'run-metadata').mkdir()
+            outside = Path(temp) / 'outside.json'
+            outside.write_text('{"private":true}')
+            (root / 'run-metadata/extra.json').symlink_to(outside)
+            with self.assertRaisesRegex(ValueError, 'symlink'):
+                module.package(root, Path(temp) / 'symlink-out')

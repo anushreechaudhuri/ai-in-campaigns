@@ -16,7 +16,25 @@ def package(root, out, max_bytes=20_000_000):
     if out.exists():
         raise ValueError('Use a new delivery directory')
     out.mkdir(parents=True)
-    records = [json.loads(line) for line in (root / 'captures.jsonl').read_text().splitlines()]
+    expected = {}
+    def read_checked(relative, sha256=None, length=None):
+        if (root / relative).is_symlink():
+            raise ValueError('Corpus symlink refused')
+        path = inside(root, relative)
+        body = path.read_bytes()
+        computed = hashlib.sha256(body).hexdigest()
+        declared = expected.get(relative)
+        if sha256 is not None and computed != sha256 or length is not None and len(body) != length:
+            raise ValueError('Capture receipt checksum/length mismatch')
+        if declared and (computed != declared['sha256'] or len(body) != declared['bytes']):
+            raise ValueError('Merged corpus checksum/length mismatch')
+        return body
+    if (root / 'sha256sums.json').exists():
+        checks = json.loads(read_checked('sha256sums.json'))
+        expected = {r['path']: r for r in checks}
+        if len(expected) != len(checks):
+            raise ValueError('Duplicate corpus checksum paths')
+    records = [json.loads(line) for line in read_checked('captures.jsonl').decode().splitlines()]
     for record in records:
         record['path'] = str(inside(root, record['path']).relative_to(root))
         for observation in [record] + record.get('observations', []):
@@ -33,14 +51,21 @@ def package(root, out, max_bytes=20_000_000):
         info.mode, info.size, info.mtime = 0o600, len(body), 0
         tar.addfile(info, io.BytesIO(body))
     def make(rows, path):
-        files = {r['path'] for r in rows}
+        files = {}
+        def declare(relative, sha256, length=None):
+            if relative in files:
+                prior_sha, prior_length = files[relative]
+                if prior_sha != sha256 or prior_length is not None and length is not None and prior_length != length:
+                    raise ValueError('Conflicting capture receipt hashes/lengths')
+            files[relative] = (sha256, length)
         for record in rows:
+            declare(record['path'], record['sha256'], record.get('bytes'))
             for observation in [record] + record.get('observations', []):
-                files.update(c['path'] for c in observation.get('robots_checks', []))
+                for check in observation.get('robots_checks', []):
+                    declare(check['path'], check['sha256'])
         with path.open('wb') as raw, gzip.GzipFile(filename='', mode='wb', fileobj=raw, mtime=0) as compressed, tarfile.open(fileobj=compressed, mode='w') as tar:
             for relative in sorted(files):
-                path = inside(root, relative)
-                add(tar, relative, path.read_bytes())
+                add(tar, relative, read_checked(relative, *files[relative]))
             add(tar, 'captures.jsonl', ''.join(json.dumps(r) + '\n' for r in rows).encode())
             add(tar, 'README.txt', note.encode())
     queue, saved = [records] if records else [], []
@@ -59,12 +84,17 @@ def package(root, out, max_bytes=20_000_000):
                           'sha256': hashlib.sha256(path.read_bytes()).hexdigest(),
                           'capture_receipts': len(rows), 'candidate_ids': len({r['candidate_id'] for r in rows})})
     coverage = out / 'coverage-and-readme.zip'
+    if (root / 'run-metadata').is_symlink():
+        raise ValueError('Run metadata symlink refused')
     with zipfile.ZipFile(coverage, 'w', compression=zipfile.ZIP_DEFLATED) as target:
         for filename in ('coverage-ledger.json', 'merge-summary.json', 'pdf-verification.json', 'failed-captures.json'):
-            target.write(root / filename, filename)
+            target.writestr(filename, read_checked(filename))
         for path in sorted((root / 'run-metadata').rglob('*')):
+            if path.is_symlink():
+                raise ValueError('Run metadata symlink refused')
             if path.is_file():
-                target.write(path, str(path.relative_to(root)))
+                relative = str(path.relative_to(root))
+                target.writestr(relative, read_checked(relative))
         target.writestr('README.txt', note)
         target.writestr('download-batches.json', json.dumps(saved, indent=2) + '\n')
     if coverage.stat().st_size > max_bytes:
