@@ -5,7 +5,7 @@ import time
 import urllib.parse
 from html.parser import HTMLParser
 from pathlib import Path
-from .common import USER_AGENT, digest, get_header, now, public_url, request, write_json
+from .common import USER_AGENT, atomic_write, digest, get_header, now, public_url, request, write_json
 from .robots import RobotsPolicy
 
 
@@ -38,7 +38,7 @@ class Collector:
             self.out.mkdir(parents=True, exist_ok=True)
             (self.out / "robots").mkdir(exist_ok=True)
             robot_path = f"robots/{digest(body)}.txt"
-            (self.out / robot_path).write_bytes(body)
+            atomic_write(self.out / robot_path, body)
             receipt["path"] = robot_path
             if status == 404:
                 parser = RobotsPolicy("", USER_AGENT)
@@ -85,7 +85,7 @@ class Collector:
             sha = digest(body)
             relative = f"objects/{sha}.{'pdf' if is_pdf else 'html'}"
             (self.out / "objects").mkdir(parents=True, exist_ok=True)
-            (self.out / relative).write_bytes(body)
+            atomic_write(self.out / relative, body)
             captured_at = now()
             record = {"candidate_id": row["candidate_id"], "source_url": row["source_url"],
                       "final_url": url, "status": "captured", "captured_at": captured_at,

@@ -7,6 +7,7 @@ import urllib.parse
 from pathlib import Path
 from campaign_research.audit import audit
 from campaign_research.capture import capture
+from campaign_research.collect import collect
 from campaign_research.common import digest, fetch_public, now, read_json, write_json
 from campaign_research.storage import transfer, upload_run
 
@@ -58,6 +59,18 @@ def main():
     c.add_argument("--delay", type=float, default=2)
     c.add_argument("--out", required=True)
     c.set_defaults(run=capture)
+    b = commands.add_parser("collect", help="Checkpointed full-seed campaign website discovery and bounded policy/PDF acquisition")
+    b.add_argument("--inventory", required=True)
+    b.add_argument("--dataset")
+    b.add_argument("--limit", type=int)
+    b.add_argument("--workers", type=int, default=4)
+    b.add_argument("--max-pages", type=int, default=6)
+    b.add_argument("--max-pdfs", type=int, default=4)
+    b.add_argument("--max-mib", type=int, default=4096)
+    b.add_argument("--max-requests", type=int, default=30000)
+    b.add_argument("--retry-failures", action="store_true", help="Retry failed/partial checkpoints once; successful checkpoints are reused")
+    b.add_argument("--out", required=True)
+    b.set_defaults(run=collect)
     t = commands.add_parser("r2", help="Explicit private file transfer to/from existing bucket")
     t.add_argument("direction", choices=["pull", "push"])
     t.add_argument("--key", required=True)

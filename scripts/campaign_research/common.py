@@ -6,6 +6,8 @@ import json
 import re
 import socket
 import ssl
+import os
+import tempfile
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -24,10 +26,26 @@ def digest(body):
     return hashlib.sha256(body).hexdigest()
 
 
-def write_json(path, value):
+def atomic_write(path, body):
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(value, indent=2, ensure_ascii=False) + "\n")
+    with tempfile.NamedTemporaryFile(dir=path.parent, prefix=".partial-", delete=False) as temporary:
+        temp_path = Path(temporary.name)
+        try:
+            temporary.write(body)
+            temporary.flush()
+            os.fsync(temporary.fileno())
+        except BaseException:
+            temp_path.unlink(missing_ok=True)
+            raise
+    try:
+        temp_path.replace(path)
+    finally:
+        temp_path.unlink(missing_ok=True)
+
+
+def write_json(path, value):
+    atomic_write(path, (json.dumps(value, indent=2, ensure_ascii=False) + "\n").encode())
 
 
 def read_json(path):

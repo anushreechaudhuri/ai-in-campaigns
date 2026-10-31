@@ -89,6 +89,19 @@ Robots matching supports longest-path precedence, Allow ties, merged applicable 
 
 ## Preserve outputs and resume
 
+For full-seed policy acquisition, use the public-only seed or a private canonical inventory:
+
+```sh
+python3 scripts/research.py collect \
+  --inventory seeds/candidates-public.json \
+  --workers 4 --max-pages 6 --max-pdfs 4 \
+  --max-mib 1024 --max-requests 30000 --out runs/policy
+```
+
+Add `--dataset runs/current/public/dataset.json` when a published snapshot is available; only exact unique-name matches supply additional website references. Missing websites are discovered from explicit campaign-website anchors on canonical candidate pages. Failed robots access is cached per origin for the run, so a blocked reference site is not repeatedly requested for every candidate. Per-origin request locks and spacing apply across the four worker threads. Statuses distinguish failed discovery, missing website links, capture failure, no policy found in the bounded scan, successful/partial policy captures, and exhausted budgets. A homepage-only capture is not claimed as full policy coverage; automatically selected PDFs remain unreviewed policy candidates. Each completed candidate has an atomic checkpoint, and every accepted source body is rehashed before its receipt is recorded. Resuming the same output directory skips checkpoints; `--retry-failures` permits one further attempt for failed or partial candidates. Byte budgets may exceed the limit by at most the bounded responses already in flight before workers stop.
+
+Raw artifacts must be held in a private repository or private object store. Public-repository Actions artifacts inherit public repository read access and are unsuitable for this corpus. The temporary acquisition workflow uses an isolated `campaign-preservation` branch of the owner's existing private `kb` repository; its main branch and existing project files are unchanged. Private artifacts have seven-day retention, so retrieve/mirror them before expiry. No new credentials or access grants are created by that workflow.
+
 The following commands use credentials supplied to the process, never stored in Git. Uploads are explicit writes and should be run only after authorization for that destination.
 
 ```sh
