@@ -48,7 +48,7 @@ def merge(inventory, runs, out, scope_review=None):
         metadata = out / 'run-metadata' / run_id
         metadata.mkdir(parents=True)
         for filename in ('input-public-seed.json', 'run-config.json', 'source-note.json',
-                         'verification.json', 'capture-summary.json', 'collect-summary.json', 'summary.json'):
+                         'verification.json', 'capture-summary.json', 'collect-summary.json', 'summary.json', 'source-controls.json'):
             if (root / filename).is_symlink():
                 raise ValueError('Run metadata symlink refused')
             if (root / filename).is_file():

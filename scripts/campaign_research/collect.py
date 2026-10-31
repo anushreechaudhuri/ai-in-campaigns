@@ -12,7 +12,7 @@ from html.parser import HTMLParser
 from pathlib import Path
 from .audit import inventory
 from .capture import Collector
-from .common import MAX_BYTES, decode_html, digest, inside, now, read_json, request, write_json
+from .common import MAX_BYTES, decode_html, digest, get_header, inside, now, read_json, request, write_json
 
 POLICY = re.compile(r"\b(issues?|polic(?:y|ies)|priorities|platform|agenda|vision|positions?|plans?|stand(?:s|ing)?)\b", re.I)
 EXCLUDE = re.compile(r"privacy[-_/ ]+policy|cookie|terms[-_/ ]+(?:of|and|conditions|service)|/(?:donate|volunteer|press|news|blog|events?)(?:/|$)|(?:^|\s)/(?:merchant-policies|return-and-refund-policy|text-policy|messaging-policy)(?:/|$)", re.I)
@@ -65,6 +65,7 @@ class Engine(Collector):
         self.times = {}
         self.delays = {}
         self.failures = {}
+        self.control_events = []
         self.state_lock = threading.Lock()
         self.budget_changed = threading.Condition(self.state_lock)
         self.requests = self.downloaded = self.reserved = 0
@@ -77,6 +78,8 @@ class Engine(Collector):
     def gated_request(self, url, **kwargs):
         host = origin(url)
         with self.gates[host]:
+            if host in self.failures:
+                raise ValueError(self.failures[host])
             with self.budget_changed:
                 while True:
                     if self.exhausted or self.requests >= self.max_requests or self.downloaded >= self.max_bytes:
@@ -94,11 +97,24 @@ class Engine(Collector):
             self.times[host] = time.monotonic()
             used = 0
             try:
+                if host in self.failures:
+                    raise ValueError(self.failures[host])
                 result = self.upstream(url, **{**kwargs, "max_bytes": reservation - 1})
                 used = len(result[2])
+                status, headers, body = result
+                if status in (202, 401, 403, 429):
+                    self.pause_origin(url, f"Source HTTP {status}; origin paused without retry", status=status, headers=headers)
+                elif not body.startswith(b'%PDF-') and any(marker in decode_html(body).lower() for marker in (
+                        '/cdn-cgi/challenge-platform/', 'cf-chl-', '<title>just a moment', '<title>access denied')):
+                    self.pause_origin(url, 'Source returned an access-control page; origin paused without retry', status=status, headers=headers)
+                elif get_header(headers, 'content-encoding').lower() not in ('', 'identity'):
+                    self.pause_origin(url, 'Source content encoding requires review; origin paused', status=status, headers=headers)
                 return result
             except Exception as error:
-                used = getattr(error, "bytes_read", 0)
+                used = max(used, getattr(error, "bytes_read", 0))
+                reason = str(error) if isinstance(error, ValueError) else type(error).__name__
+                if re.search(r'SSLError|SSLCert|SSLEOF|certificate|non.public network', reason, re.I):
+                    self.pause_origin(url, reason)
                 raise
             finally:
                 with self.budget_changed:
@@ -106,6 +122,28 @@ class Engine(Collector):
                     self.downloaded += used
                     self.exhausted |= self.downloaded >= self.max_bytes
                     self.budget_changed.notify_all()
+
+    def save_controls(self):
+        with self.state_lock:
+            write_json(self.out / 'source-controls.json', {
+                'paused_origins': {urllib.parse.urlunsplit((*key, '', '', '')): value
+                                   for key, value in self.failures.copy().items()},
+                'events': list(self.control_events)})
+
+    def pause_origin(self, url, reason, status=None, headers=None, inherited=False):
+        """Keep a restriction across later paths and the equivalent www alias."""
+        parsed = urllib.parse.urlsplit(url)
+        self.failures[origin(url)] = reason
+        if parsed.scheme == 'https' and parsed.hostname and ':' not in parsed.hostname and parsed.port in (None, 443):
+            alias = parsed.hostname[4:] if parsed.hostname.startswith('www.') else 'www.' + parsed.hostname
+            for hostname in (parsed.hostname, alias):
+                self.failures[(parsed.scheme, hostname)] = reason
+                self.failures[(parsed.scheme, hostname + ':443')] = reason
+        if not inherited:
+            with self.state_lock:
+                self.control_events.append({'url': url, 'reason': reason, 'status': status,
+                                            'retry_after': get_header(headers or {}, 'retry-after'), 'checked_at': now()})
+            self.save_controls()
 
     def allowed(self, url):
         host = origin(url)
@@ -249,6 +287,19 @@ def collect(args):
     out = Path(args.out)
     (out / "checkpoints").mkdir(parents=True, exist_ok=True)
     engine = Engine(out, args.max_mib * 1024 * 1024, args.max_requests)
+    if Path(args.inventory).suffix.lower() == '.json':
+        supplied = read_json(args.inventory)
+        controls = supplied.get('blocked_source_origins', {}) if isinstance(supplied, dict) else {}
+        if not isinstance(controls, dict):
+            raise ValueError('blocked_source_origins must be an origin-to-reason mapping')
+        for url, reason in controls.items():
+            parsed = urllib.parse.urlsplit(url)
+            if (parsed.scheme != 'https' or not parsed.hostname or parsed.username or parsed.password
+                    or parsed.port not in (None, 443) or parsed.path not in ('', '/')
+                    or parsed.query or parsed.fragment or not isinstance(reason, str) or not reason.strip()):
+                raise ValueError('Invalid inherited source-control origin or reason')
+            engine.pause_origin(url, reason, inherited=True)
+        engine.save_controls()
     supplemental = {}
     if args.dataset:
         counts = Counter(r["name"].casefold() for r in rows)

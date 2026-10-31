@@ -98,7 +98,7 @@ class Collector:
             is_pdf = body.startswith(b"%PDF-")
             if is_pdf and row.get("allow_pdf") is False:
                 raise ValueError("PDF response exceeds candidate PDF cap; sniffed body not retained")
-            if not is_pdf and any(marker in body.lower() for marker in (b"/cdn-cgi/challenge-platform/", b"cf-chl-", b"<title>just a moment", b"<title>access denied")):
+            if not is_pdf and any(marker in decode_html(body).lower() for marker in ("/cdn-cgi/challenge-platform/", "cf-chl-", "<title>just a moment", "<title>access denied")):
                 raise ValueError("Source returned an access-control page; manual review required")
             if not is_pdf and content_type not in ("text/html", "application/xhtml+xml"):
                 raise ValueError("Only HTML or PDF campaign sources accepted")

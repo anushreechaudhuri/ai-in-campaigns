@@ -3,6 +3,7 @@ import argparse
 import threading
 import sys
 import tempfile
+import ssl
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -13,6 +14,74 @@ from campaign_research.common import ReadFailure
 
 
 class CollectTests(unittest.TestCase):
+    def test_source_restriction_stops_later_policy_paths_and_www_alias(self):
+        for status in (202, 401, 403, 429):
+            with self.subTest(status=status):
+                calls = []
+                def transport(url, **kwargs):
+                    calls.append(url)
+                    if url.endswith('/robots.txt'):
+                        return 404, {}, b''
+                    if url.endswith('/'):
+                        return 200, {'Content-Type': 'text/html'}, b'<html><a href="/issues">Issues</a><a href="/platform">Platform</a></html>'
+                    return status, {'Retry-After': '3600'}, b'Unavailable'
+                with tempfile.TemporaryDirectory() as root, patch('campaign_research.capture.public_url', side_effect=lambda u: u):
+                    Path(root, 'checkpoints').mkdir()
+                    engine = Engine(root, 100000, 100, transport=transport, sleeper=lambda _: None)
+                    state = process_candidate(engine, {'candidate_id': 'a', 'name': 'A', 'website': 'https://campaign.example/'}, 4, 0)
+                    self.assertEqual(state['status'], 'partial')
+                    self.assertNotIn('https://campaign.example/platform', calls)
+                    with self.assertRaisesRegex(ValueError, 'paused'):
+                        engine.acquire('a', 'https://www.campaign.example:443/platform', 'campaign_page', [])
+                    self.assertEqual(len(calls), 3)
+
+    def test_challenge_encoding_and_tls_failure_pause_future_requests(self):
+        for failure in ('challenge', 'challenge_utf16', 'encoding', 'tls'):
+            with self.subTest(failure=failure):
+                calls = []
+                def transport(url, **kwargs):
+                    calls.append(url)
+                    if url.endswith('/robots.txt'):
+                        return 404, {}, b''
+                    if failure == 'tls':
+                        raise ssl.SSLEOFError('EOF during TLS handshake')
+                    headers = {'Content-Type': 'text/html'}
+                    if failure == 'encoding':
+                        headers['Content-Encoding'] = 'gzip'
+                    body = '<html><title>Just a moment</title></html>' if failure.startswith('challenge') else '<html>Encoded body</html>'
+                    return 200, headers, body.encode('utf-16' if failure == 'challenge_utf16' else 'utf-8')
+                with tempfile.TemporaryDirectory() as root, patch('campaign_research.capture.public_url', side_effect=lambda u: u):
+                    engine = Engine(root, 100000, 100, transport=transport, sleeper=lambda _: None)
+                    with self.assertRaises((ValueError, ssl.SSLEOFError)):
+                        engine.acquire('a', 'https://campaign.example/issues', 'campaign_page', [])
+                    with self.assertRaises(ValueError):
+                        engine.acquire('a', 'https://www.campaign.example/platform', 'campaign_page', [])
+                    self.assertEqual(len(calls), 2)
+
+    def test_inherited_control_blocks_direct_and_redirected_requests(self):
+        calls = []
+        def transport(url, **kwargs):
+            calls.append(url)
+            return (404, {}, b'') if url.endswith('/robots.txt') else (302, {'Location': 'https://www.blocked.example/issues'}, b'')
+        original = Engine
+        with tempfile.TemporaryDirectory() as root, patch('campaign_research.capture.public_url', side_effect=lambda u: u), patch('campaign_research.collect.Engine', side_effect=lambda out, size, count: original(out, size, count, transport=transport, sleeper=lambda _: None)):
+            seed = Path(root, 'seed.json')
+            seed.write_text(json.dumps({'candidates': [
+                {'candidate_id': 'direct', 'name': 'Direct', 'website': 'https://blocked.example/'},
+                {'candidate_id': 'redirect', 'name': 'Redirect', 'website': 'https://allowed.example/'}],
+                'blocked_source_origins': {'https://blocked.example:443': 'Prior login restriction; paused'}}))
+            args = argparse.Namespace(inventory=seed, out=Path(root, 'out'), dataset=None, limit=None, workers=1, max_pages=1, max_pdfs=0, max_mib=1, max_requests=100, retry_failures=False)
+            collect(args)
+            self.assertEqual(calls, ['https://allowed.example/robots.txt', 'https://allowed.example/'])
+
+    def test_invalid_inherited_controls_fail_before_source_transport(self):
+        with tempfile.TemporaryDirectory() as root, patch('campaign_research.collect.request', side_effect=AssertionError('No source request permitted')):
+            seed = Path(root, 'seed.json')
+            seed.write_text(json.dumps({'candidates': [], 'blocked_source_origins': {'https://source.example/private/path': 'Prior restriction'}}))
+            args = argparse.Namespace(inventory=seed, out=Path(root, 'out'), dataset=None, limit=None, workers=1, max_pages=1, max_pdfs=0, max_mib=1, max_requests=100, retry_failures=False)
+            with self.assertRaisesRegex(ValueError, 'Invalid inherited'):
+                collect(args)
+
     def test_footer_policies_do_not_displace_campaign_issues_with_a_small_page_limit(self):
         calls = []
         legal = ('merchant-policies', 'return-and-refund-policy', 'text-policy', 'messaging-policy')
