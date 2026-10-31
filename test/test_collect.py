@@ -13,6 +13,25 @@ from campaign_research.common import ReadFailure
 
 
 class CollectTests(unittest.TestCase):
+    def test_explicit_external_policy_pdf_checks_its_own_robots_without_html_expansion(self):
+        for deny in (False, True):
+            calls = []
+            def transport(url, **kwargs):
+                calls.append(url)
+                if url.endswith('/robots.txt'):
+                    return (200, {}, b'User-agent: *\nDisallow: /\n') if deny and 'documents.example' in url else (404, {}, b'')
+                if url.endswith('.pdf'):
+                    return 200, {'Content-Type': 'application/pdf'}, b'%PDF-1.7 platform'
+                return 200, {'Content-Type': 'text/html'}, b'<html><a href="https://documents.example/platform.pdf">Policy platform PDF</a><a href="https://unrelated.example/issues">Other issues</a></html>'
+            with tempfile.TemporaryDirectory() as root, patch('campaign_research.capture.public_url', side_effect=lambda u: u):
+                Path(root, 'checkpoints').mkdir()
+                state = process_candidate(Engine(root, 100000, 100, transport=transport, sleeper=lambda _: None), {'candidate_id': 'https://ballotpedia.org/Example', 'name': 'Example', 'website': 'https://campaign.example/issues'}, 6, 4)
+                self.assertIn('https://documents.example/robots.txt', calls)
+                self.assertNotIn('https://unrelated.example/issues', calls)
+                self.assertEqual(state['policy_pdf_candidates'], 0 if deny else 1)
+                if deny:
+                    self.assertNotIn('https://documents.example/platform.pdf', calls)
+
     def test_path_denial_does_not_poison_allowed_paths(self):
         calls=[]
         def transport(url, **kwargs):

@@ -200,12 +200,12 @@ def process_candidate(engine, candidate, max_pages, max_pdfs, supplemental=None)
             for href, label in Anchors(body).links:
                 target = urllib.parse.urljoin(record["final_url"], href).split("#", 1)[0]
                 parsed = urllib.parse.urlsplit(target)
-                if parsed.scheme != "https" or origin(target) != origin(record["final_url"]) or EXCLUDE.search(label + " " + parsed.path):
+                if parsed.scheme != "https" or EXCLUDE.search(label + " " + parsed.path):
                     continue
                 if parsed.path.lower().endswith(".pdf"):
                     if is_policy or POLICY.search(label + " " + parsed.path):
                         pdfs.append((target, record["final_url"]))
-                elif POLICY.search(label + " " + parsed.path) and target not in seen:
+                elif origin(target) == origin(record["final_url"]) and POLICY.search(label + " " + parsed.path) and target not in seen:
                     queue.append((target, True, "Policy/issues link from " + record["final_url"]))
         for url, parent in list(dict(pdfs).items())[:max_pdfs - state["policy_pdf_candidates"]]:
             if engine.exhausted:
