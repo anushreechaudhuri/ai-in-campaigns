@@ -62,6 +62,7 @@ class Engine(Collector):
         self.delays = {}
         self.failures = {}
         self.state_lock = threading.Lock()
+        self.budget_changed = threading.Condition(self.state_lock)
         self.requests = self.downloaded = self.reserved = 0
         self.identity = None
         self.max_bytes, self.max_requests = max_bytes, max_requests
@@ -72,11 +73,16 @@ class Engine(Collector):
     def gated_request(self, url, **kwargs):
         host = origin(url)
         with self.gates[host]:
-            with self.state_lock:
-                available = self.max_bytes - self.downloaded - self.reserved
-                if self.exhausted or self.requests >= self.max_requests or available <= 0:
-                    self.exhausted = True
-                    raise ValueError("Acquisition request/byte budget exhausted")
+            with self.budget_changed:
+                while True:
+                    if self.exhausted or self.requests >= self.max_requests or self.downloaded >= self.max_bytes:
+                        self.exhausted = True
+                        self.budget_changed.notify_all()
+                        raise ValueError("Acquisition request/byte budget exhausted")
+                    available = self.max_bytes - self.downloaded - self.reserved
+                    if available > 0:
+                        break
+                    self.budget_changed.wait()
                 self.requests += 1
                 reservation = min(kwargs.get("max_bytes", MAX_BYTES) + 1, available)
                 self.reserved += reservation
@@ -91,10 +97,11 @@ class Engine(Collector):
                 used = getattr(error, "bytes_read", 0)
                 raise
             finally:
-                with self.state_lock:
+                with self.budget_changed:
                     self.reserved -= reservation
                     self.downloaded += used
                     self.exhausted |= self.downloaded >= self.max_bytes
+                    self.budget_changed.notify_all()
 
     def allowed(self, url):
         host = origin(url)

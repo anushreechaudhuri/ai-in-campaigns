@@ -1,5 +1,6 @@
 import json
 import argparse
+import threading
 import sys
 import tempfile
 import unittest
@@ -49,6 +50,29 @@ class CollectTests(unittest.TestCase):
             self.assertTrue(engine.exhausted)
             with self.assertRaisesRegex(ValueError,'budget'):engine.gated_request('https://campaign.example/b')
             self.assertEqual(engine.requests,1)
+
+    def test_temporary_budget_reservations_wait_without_false_exhaustion(self):
+        started=threading.Event();release=threading.Event();waiting=threading.Event();errors=[]
+        def transport(url,**kwargs):
+            if 'one.example' in url:
+                started.set()
+                if not release.wait(2):raise RuntimeError('test timeout')
+            return 200,{},b'x'
+        with tempfile.TemporaryDirectory() as root:
+            engine=Engine(root,100,100,transport=transport,sleeper=lambda _:None)
+            original_wait=engine.budget_changed.wait
+            def wait(*args,**kwargs):waiting.set();return original_wait(*args,**kwargs)
+            def call(url):
+                try:engine.gated_request(url)
+                except Exception as error:errors.append(error)
+            with patch.object(engine.budget_changed,'wait',side_effect=wait):
+                first=threading.Thread(target=call,args=('https://one.example/',),daemon=True)
+                second=threading.Thread(target=call,args=('https://two.example/',),daemon=True)
+                first.start();self.assertTrue(started.wait(2));second.start()
+                self.assertTrue(waiting.wait(2));release.set();first.join(2);second.join(2)
+            self.assertFalse(errors)
+            self.assertFalse(engine.exhausted)
+            self.assertEqual(engine.downloaded,2)
 
     def test_extensionless_pdf_does_not_bypass_zero_pdf_cap(self):
         def transport(url,**kwargs):
