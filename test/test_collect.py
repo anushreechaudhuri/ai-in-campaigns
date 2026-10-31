@@ -14,6 +14,43 @@ from campaign_research.common import ReadFailure
 
 
 class CollectTests(unittest.TestCase):
+    def test_resume_retains_access_denials_and_events_with_retry_requested(self):
+        calls = []
+        def transport(url, **kwargs):
+            calls.append(url)
+            return (404, {}, b'') if url.endswith('/robots.txt') else (403, {'Retry-After': '3600'}, b'Denied')
+        original = Engine
+        with tempfile.TemporaryDirectory() as root, patch('campaign_research.capture.public_url', side_effect=lambda u: u), patch('campaign_research.collect.Engine', side_effect=lambda out, size, count: original(out, size, count, transport=transport, sleeper=lambda _: None)):
+            seed = Path(root, 'seed.json')
+            seed.write_text(json.dumps({'candidates': [{'candidate_id': 'a', 'name': 'A', 'website': 'https://campaign.example/'}]}))
+            out = Path(root, 'out')
+            args = argparse.Namespace(inventory=seed, out=out, dataset=None, limit=None, workers=1, max_pages=2, max_pdfs=0, max_mib=1, max_requests=100, retry_failures=False)
+            collect(args)
+            before = (out / 'source-controls.json').read_bytes()
+            self.assertEqual(json.loads(before)['events'][0]['retry_after'], '3600')
+            collect(args)
+            args.retry_failures = True
+            collect(args)
+            self.assertEqual((out / 'source-controls.json').read_bytes(), before)
+            self.assertEqual(calls, ['https://campaign.example/robots.txt', 'https://campaign.example/'])
+
+    def test_challenge_or_encoded_redirect_does_not_follow_new_origin(self):
+        for encoding in (False, True):
+            calls = []
+            def transport(url, **kwargs):
+                calls.append(url)
+                if url.endswith('/robots.txt'):
+                    return 404, {}, b''
+                headers = {'Location': 'https://new.example/issues', 'Content-Type': 'text/html'}
+                if encoding:
+                    headers['Content-Encoding'] = 'gzip'
+                return 302, headers, b'Encoded' if encoding else b'<title>Just a moment</title>'
+            with tempfile.TemporaryDirectory() as root, patch('campaign_research.capture.public_url', side_effect=lambda u: u):
+                engine = Engine(root, 100000, 100, transport=transport, sleeper=lambda _: None)
+                with self.assertRaisesRegex(ValueError, 'paused'):
+                    engine.acquire('a', 'https://campaign.example/issues', 'campaign_page', [])
+                self.assertEqual(calls, ['https://campaign.example/robots.txt', 'https://campaign.example/issues'])
+
     def test_source_restriction_stops_later_policy_paths_and_www_alias(self):
         for status in (202, 401, 403, 429):
             with self.subTest(status=status):
@@ -226,9 +263,11 @@ class CollectTests(unittest.TestCase):
             args=argparse.Namespace(inventory=path,out=out,dataset=None,limit=None,workers=1,max_pages=1,max_pdfs=0,max_mib=1,max_requests=100,retry_failures=False)
             collect(args)
             before=(out/'run-config.json').read_bytes()
+            controls_before=(out/'source-controls.json').read_bytes()
             path.write_text(json.dumps([{**row,'website':'https://new.example/'}]))
             with self.assertRaisesRegex(ValueError,'different input/config/code'):collect(args)
             self.assertEqual((out/'run-config.json').read_bytes(),before)
+            self.assertEqual((out/'source-controls.json').read_bytes(),controls_before)
 
     def test_policy_pages_and_linked_pdfs_are_preserved_and_verified(self):
         responses = {

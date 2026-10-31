@@ -44,6 +44,18 @@ def origin(url):
     return (p.scheme, p.netloc.lower())
 
 
+def validate_controls(controls):
+    if not isinstance(controls, dict):
+        raise ValueError('blocked_source_origins must be an origin-to-reason mapping')
+    for url, reason in controls.items():
+        parsed = urllib.parse.urlsplit(url)
+        if (parsed.scheme != 'https' or not parsed.hostname or parsed.username or parsed.password
+                or parsed.port not in (None, 443) or parsed.path not in ('', '/')
+                or parsed.query or parsed.fragment or not isinstance(reason, str) or not reason.strip()):
+            raise ValueError('Invalid inherited source-control origin or reason')
+    return controls
+
+
 def campaign_url(value):
     if not value:
         return ""
@@ -106,9 +118,13 @@ class Engine(Collector):
                     self.pause_origin(url, f"Source HTTP {status}; origin paused without retry", status=status, headers=headers)
                 elif not body.startswith(b'%PDF-') and any(marker in decode_html(body).lower() for marker in (
                         '/cdn-cgi/challenge-platform/', 'cf-chl-', '<title>just a moment', '<title>access denied')):
-                    self.pause_origin(url, 'Source returned an access-control page; origin paused without retry', status=status, headers=headers)
+                    reason = 'Source returned an access-control page; origin paused without retry'
+                    self.pause_origin(url, reason, status=status, headers=headers)
+                    raise ValueError(reason)
                 elif get_header(headers, 'content-encoding').lower() not in ('', 'identity'):
-                    self.pause_origin(url, 'Source content encoding requires review; origin paused', status=status, headers=headers)
+                    reason = 'Source content encoding requires review; origin paused'
+                    self.pause_origin(url, reason, status=status, headers=headers)
+                    raise ValueError(reason)
                 return result
             except Exception as error:
                 used = max(used, getattr(error, "bytes_read", 0))
@@ -287,19 +303,10 @@ def collect(args):
     out = Path(args.out)
     (out / "checkpoints").mkdir(parents=True, exist_ok=True)
     engine = Engine(out, args.max_mib * 1024 * 1024, args.max_requests)
+    seed_controls = {}
     if Path(args.inventory).suffix.lower() == '.json':
         supplied = read_json(args.inventory)
-        controls = supplied.get('blocked_source_origins', {}) if isinstance(supplied, dict) else {}
-        if not isinstance(controls, dict):
-            raise ValueError('blocked_source_origins must be an origin-to-reason mapping')
-        for url, reason in controls.items():
-            parsed = urllib.parse.urlsplit(url)
-            if (parsed.scheme != 'https' or not parsed.hostname or parsed.username or parsed.password
-                    or parsed.port not in (None, 443) or parsed.path not in ('', '/')
-                    or parsed.query or parsed.fragment or not isinstance(reason, str) or not reason.strip()):
-                raise ValueError('Invalid inherited source-control origin or reason')
-            engine.pause_origin(url, reason, inherited=True)
-        engine.save_controls()
+        seed_controls = validate_controls(supplied.get('blocked_source_origins', {}) if isinstance(supplied, dict) else {})
     supplemental = {}
     if args.dataset:
         counts = Counter(r["name"].casefold() for r in rows)
@@ -317,7 +324,17 @@ def collect(args):
     if config_path.exists():
         if read_json(config_path).get("identity") != engine.identity:
             raise ValueError("Existing output has different input/config/code; use a fresh output directory")
-    else:
+    prior_controls = {}
+    controls_path = out / 'source-controls.json'
+    if controls_path.exists():
+        prior = read_json(controls_path)
+        if not isinstance(prior, dict) or not isinstance(prior.get('events'), list) or any(not isinstance(event, dict) for event in prior['events']):
+            raise ValueError('Invalid saved source controls; no source requests permitted')
+        prior_controls = validate_controls(prior.get('paused_origins'))
+        engine.control_events = list(prior['events'])
+    for url, reason in {**seed_controls, **prior_controls}.items():
+        engine.pause_origin(url, reason, inherited=True)
+    if not config_path.exists():
         write_json(config_path, config)
     invocation = {"id": uuid.uuid4().hex, "started_at": now(), "config_identity": engine.identity,
                   "budget_scope": "This invocation only; previous invocation receipts are retained",
@@ -338,6 +355,7 @@ def collect(args):
                 results[row["candidate_id"]] = previous
         else:
             pending.append(row)
+    engine.save_controls()
     def save():
         summary = {"updated_at": now(), "intended": len(rows), "completed": len(results),
                    "counts": dict(Counter(r["status"] for r in results.values())),
