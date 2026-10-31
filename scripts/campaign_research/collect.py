@@ -123,10 +123,10 @@ class Engine(Collector):
                     self.failures[host] = reason
                 raise ValueError(reason) from None
 
-    def acquire(self, cid, url, kind, records, context="", allow_pdf=True):
+    def acquire(self, cid, url, kind, records, context="", allow_pdf=True, require_pdf=False):
         if origin(url) in self.failures:
             raise ValueError(self.failures[origin(url)])
-        record, _ = self.capture({"candidate_id": cid, "source_url": url, "kind": kind, "allow_pdf": allow_pdf})
+        record, _ = self.capture({"candidate_id": cid, "source_url": url, "kind": kind, "allow_pdf": allow_pdf, "require_pdf": require_pdf})
         if kind == "reference_page":
             record["kind"] = kind
         record["policy_context"] = context
@@ -214,7 +214,7 @@ def process_candidate(engine, candidate, max_pages, max_pdfs, supplemental=None)
                 continue
             seen.add(url)
             try:
-                engine.acquire(cid, url, "campaign_pdf", records, "Unreviewed PDF linked from policy context " + parent)
+                engine.acquire(cid, url, "campaign_pdf", records, "Unreviewed PDF linked from policy context " + parent, require_pdf=True)
                 state["policy_pdf_candidates"] += 1
             except Exception as error:
                 state["errors"].append({"url": url, "reason": str(error) if isinstance(error, ValueError) else type(error).__name__})

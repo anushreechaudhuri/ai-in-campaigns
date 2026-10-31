@@ -80,6 +80,14 @@ class AuditTests(unittest.TestCase):
 
 
 class CaptureTests(unittest.TestCase):
+    def test_unreviewed_pdf_request_requires_pdf_signature(self):
+        def transport(url, **kwargs):
+            return (404, {}, b'') if url.endswith('/robots.txt') else (200, {'Content-Type': 'text/html'}, b'<html>Not a PDF</html>')
+        with tempfile.TemporaryDirectory() as root, patch('campaign_research.capture.public_url', side_effect=lambda u: u):
+            with self.assertRaisesRegex(ValueError, 'did not return PDF'):
+                Collector(root, transport=transport, sleeper=lambda _: None).capture({'candidate_id': 'a', 'source_url': 'https://example.org/plan.pdf', 'kind': 'campaign_pdf', 'require_pdf': True})
+            self.assertFalse((Path(root) / 'objects').exists())
+
     def test_normal_robots_redirect_preserves_rules_and_denials(self):
         for rules in [b'User-agent: *\nAllow: /\n', b'User-agent: *\nDisallow: /issues\n']:
             calls = []

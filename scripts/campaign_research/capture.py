@@ -93,7 +93,7 @@ class Collector:
                 raise ValueError("Source returned an access-control page; manual review required")
             if not is_pdf and content_type not in ("text/html", "application/xhtml+xml"):
                 raise ValueError("Only HTML or PDF campaign sources accepted")
-            if not body or (row.get("kind") == "policy_pdf" and not is_pdf):
+            if not body or ((row.get("kind") == "policy_pdf" or row.get("require_pdf")) and not is_pdf):
                 raise ValueError("Requested policy PDF did not return PDF bytes")
             sha = digest(body)
             relative = f"objects/{sha}.{'pdf' if is_pdf else 'html'}"
