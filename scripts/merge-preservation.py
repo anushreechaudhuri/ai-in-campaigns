@@ -29,6 +29,12 @@ def merge(inventory, runs, out):
     input_count = 0
     for run_id, root in runs:
         root = Path(root)
+        metadata = out / 'run-metadata' / run_id
+        metadata.mkdir(parents=True)
+        for filename in ('input-public-seed.json', 'run-config.json', 'source-note.json',
+                         'verification.json', 'capture-summary.json', 'collect-summary.json'):
+            if (root / filename).is_file():
+                shutil.copyfile(root / filename, metadata / filename)
         for checkpoint in sorted((root / 'checkpoints').glob('*.json')):
             state = read_json(checkpoint)
             attempts[state['candidate_id']].append({
