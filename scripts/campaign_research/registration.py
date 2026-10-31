@@ -1,9 +1,55 @@
 """Read website evidence from registration text without using email domains as sites."""
 import re
 import urllib.parse
+from html.parser import HTMLParser
 
 PREFIXED = re.compile(r'(?<![@\w.-])(?:https?://|www\.)[^\s<>\[\]{}|]+', re.I)
 BARE = re.compile(r'(?<![@\w.-])(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,24}(?:/[^\s<>\[\]{}|]*)?', re.I)
+
+
+def authorizing_candidate_ids(body):
+    """Read explicitly labeled FEC authorizing-candidate links, without fetching them.
+
+    Callers must require the unique expected ID from their independently matched
+    candidate/committee record before using a registration website as evidence.
+    Unlabeled navigation links do not establish that relationship.
+    """
+    class AuthorizingLinks(HTMLParser):
+        def __init__(self):
+            super().__init__(convert_charrefs=True)
+            self.href = None
+            self.label = []
+            self.ids = set()
+
+        def handle_starttag(self, tag, attrs):
+            if tag == 'a':
+                self.href = dict(attrs).get('href')
+                self.label = []
+
+        def handle_data(self, data):
+            if self.href is not None:
+                self.label.append(data)
+
+        def handle_endtag(self, tag):
+            if tag != 'a':
+                return
+            if self.href is not None and re.search(r'\bauthorizing\s+candidates?\b', ' '.join(self.label), re.I):
+                url = urllib.parse.urlsplit(urllib.parse.urljoin('https://www.fec.gov/', self.href))
+                try:
+                    allowed = (url.scheme == 'https' and url.hostname in ('fec.gov', 'www.fec.gov')
+                               and not url.username and not url.password and url.port in (None, 443))
+                except ValueError:
+                    allowed = False
+                match = re.fullmatch(r'/data/candidate/([HS][0-9A-Z]{8})/?', url.path)
+                if allowed and match:
+                    self.ids.add(match.group(1))
+            self.href = None
+            self.label = []
+
+    parser = AuthorizingLinks()
+    parser.feed(body.decode('utf-8', errors='replace') if isinstance(body, bytes) else body)
+    parser.close()
+    return sorted(parser.ids)
 
 
 def normalize_registered_site(value):
