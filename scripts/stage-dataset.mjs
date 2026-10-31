@@ -18,8 +18,9 @@ export function validateDataset(data) {
   for (const c of data.candidates) {
     if(typeof c.id!=='string'||!c.id||ids.has(c.id))throw Error('Missing or duplicate candidate ID');
     ids.add(c.id);
-    for(const field of ['name','state','chamber','district','partyGroup','incumbent','primary','primaryGroup','classification'])if(typeof c[field]!=='string')throw Error(`Missing ${field} for ${c.id}`);
+    for(const field of ['name','state','chamber','district','partyGroup','incumbent','primary','primaryGroup'])if(typeof c[field]!=='string')throw Error(`Missing ${field} for ${c.id}`);
     if(!Array.isArray(c.documents))throw Error(`Missing documents for ${c.id}`);
+    if(typeof c.classification!=='string'&&!(c.classification===null&&!c.documents.length))throw Error(`Missing classification for ${c.id}`);
     if(!Number.isInteger(c.words)||c.words<0)throw Error(`Invalid words for ${c.id}`);
     composition(c,c.id,!c.documents.length);
     if(!c.documents.length&&(c.words!==0||c.ai!==null||c.assisted!==null||c.human!==null))throw Error(`Unanalyzed candidate ${c.id} must have null scores and zero analyzed words`);
