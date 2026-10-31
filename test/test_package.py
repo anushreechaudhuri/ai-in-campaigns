@@ -6,6 +6,7 @@ import sys
 import tarfile
 import tempfile
 import unittest
+import zipfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
@@ -26,7 +27,9 @@ class PackageTests(unittest.TestCase):
                 sha = hashlib.sha256(body).hexdigest()
                 path = 'objects/' + sha + '.html'
                 (root / path).write_bytes(body)
-                records.append({'candidate_id': str(i), 'path': path, 'sha256': sha})
+                records.append({'candidate_id': str(i), 'path': path, 'sha256': sha,
+                                'kind': 'campaign_page', 'source_content_valid': True,
+                                'source_scope_excluded': False})
             (root / 'captures.jsonl').write_text(''.join(json.dumps(r) + '\n' for r in records))
             for filename in ('coverage-ledger.json', 'merge-summary.json', 'pdf-verification.json', 'failed-captures.json'):
                 (root / filename).write_text('{}')
@@ -42,6 +45,39 @@ class PackageTests(unittest.TestCase):
                 for line in (destination / 'captures.jsonl').read_text().splitlines():
                     record = json.loads(line)
                     self.assertEqual(hashlib.sha256((destination / record['path']).read_bytes()).hexdigest(), record['sha256'])
+
+    def test_only_verified_campaign_bodies_are_exported_and_omissions_are_auditable(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / 'corpus'
+            root.mkdir()
+            records = []
+            for i, extra in enumerate([
+                    {'kind': 'campaign_pdf', 'source_content_valid': True, 'source_scope_excluded': False},
+                    {'kind': 'reference_page', 'source_content_valid': True, 'source_scope_excluded': False},
+                    {'kind': 'campaign_page', 'source_content_valid': False, 'source_scope_excluded': False},
+                    {'kind': 'campaign_page', 'source_content_valid': True, 'source_scope_excluded': True},
+                    {'kind': 'campaign_page'}]):
+                body = ('source-' + str(i)).encode()
+                path = str(i) + '.body'
+                (root / path).write_bytes(body)
+                records.append({'candidate_id': str(i), 'path': path,
+                                'sha256': hashlib.sha256(body).hexdigest(), **extra})
+            (root / 'captures.jsonl').write_text(''.join(json.dumps(r) + '\n' for r in records))
+            for filename in ('coverage-ledger.json', 'merge-summary.json', 'pdf-verification.json', 'failed-captures.json'):
+                (root / filename).write_text('{}')
+            out = Path(temp) / 'delivery'
+            saved = module.package(root, out)
+            with tarfile.open(out / saved[0]['filename']) as archive:
+                self.assertIn('0.body', archive.getnames())
+                self.assertTrue(all(str(i) + '.body' not in archive.getnames() for i in range(1, 5)))
+                self.assertEqual(len(archive.extractfile('captures.jsonl').read().splitlines()), 1)
+            with zipfile.ZipFile(out / 'coverage-and-readme.zip') as archive:
+                omissions = json.loads(archive.read('omitted-capture-receipts.json'))
+                self.assertEqual(omissions, records[1:])
+                self.assertNotIn('1.body', archive.namelist())
+            (root / '1.body').write_bytes(b'tampered reference')
+            with self.assertRaisesRegex(ValueError, 'checksum/length'):
+                module.package(root, Path(temp) / 'changed-omitted-body')
 
     def test_source_path_escape_is_rejected(self):
         with tempfile.TemporaryDirectory() as temp:

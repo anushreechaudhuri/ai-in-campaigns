@@ -40,12 +40,26 @@ def package(root, out, max_bytes=20_000_000):
         for observation in [record] + record.get('observations', []):
             for check in observation.get('robots_checks', []):
                 check['path'] = str(inside(root, check['path']).relative_to(root))
+    # Export bodies only after the merger has established their type and scope.
+    # Other receipts remain auditable without distributing diagnostic bodies.
+    included, omitted = [], []
+    for record in records:
+        read_checked(record['path'], record['sha256'], record.get('bytes'))
+        if (record.get('kind') in ('campaign_page', 'campaign_pdf', 'policy_pdf')
+                and record.get('source_content_valid') is True
+                and record.get('source_scope_excluded') is False):
+            included.append(record)
+        else:
+            omitted.append(record)
     note = ('Private campaign source preservation archive. Each numbered archive is independently extractable.\n'
             'captures.jsonl contains source URLs, times, SHA-256 hashes and run observations.\n'
             'objects/ contains response bodies; robots/ contains corresponding policy receipts.\n'
             'Captured bytes do not establish complete policy coverage, current candidate identity or AI authorship.\n'
             'PDF candidates may include third-party references and require semantic review.\n'
-            'The companion coverage archive contains the full candidate ledger and source-run metadata.\n')
+            'Only verified, in-scope campaign response bodies are included in these numbered batches.\n'
+            'Reference, malformed, unverified and scope-excluded bodies are omitted. Their receipts remain in\n'
+            'omitted-capture-receipts.json inside the companion coverage archive, alongside the full ledger\n'
+            'and source-run metadata. Original diagnostic/reference bodies remain in private source mirrors.\n')
     def add(tar, name, body):
         info = tarfile.TarInfo(name)
         info.mode, info.size, info.mtime = 0o600, len(body), 0
@@ -68,7 +82,7 @@ def package(root, out, max_bytes=20_000_000):
                 add(tar, relative, read_checked(relative, *files[relative]))
             add(tar, 'captures.jsonl', ''.join(json.dumps(r) + '\n' for r in rows).encode())
             add(tar, 'README.txt', note.encode())
-    queue, saved = [records] if records else [], []
+    queue, saved = [included] if included else [], []
     while queue:
         rows = queue.pop(0)
         path = out / ('candidate-policy-batch-%02d.tar.gz' % (len(saved) + 1))
@@ -99,6 +113,7 @@ def package(root, out, max_bytes=20_000_000):
                 relative = str(path.relative_to(root))
                 target.writestr(relative, read_checked(relative))
         target.writestr('README.txt', note)
+        target.writestr('omitted-capture-receipts.json', json.dumps(omitted, indent=2) + '\n')
         target.writestr('download-batches.json', json.dumps(saved, indent=2) + '\n')
     if coverage.stat().st_size > max_bytes:
         raise ValueError('Coverage metadata exceeds delivery cap')
