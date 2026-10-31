@@ -14,8 +14,17 @@ def merge(inventory, runs, out):
     out = Path(out)
     if out.exists():
         raise ValueError("Use a new output directory to preserve prior audit snapshots")
+    rows = read_json(inventory)['candidates']
+    ids = [r.get('candidate_id') for r in rows]
+    if any(not isinstance(cid, str) or not cid.strip() for cid in ids) or len(set(ids)) != len(ids):
+        raise ValueError('Canonical inventory requires unique nonempty candidate IDs')
+    for run_id, root in runs:
+        root = Path(root)
+        if not root.is_dir() or not any((root / marker).exists() for marker in (
+                'captures.jsonl', 'checkpoints', 'attempts.json', 'verification.json')):
+            raise ValueError('Explicit run input is missing or has no capture/checkpoint evidence: ' + run_id)
     out.mkdir(parents=True)
-    candidates = {r['candidate_id']: r for r in read_json(inventory)['candidates']}
+    candidates = {r['candidate_id']: r for r in rows}
     records, attempts, failures = {}, collections.defaultdict(list), []
     input_count = 0
     for run_id, root in runs:

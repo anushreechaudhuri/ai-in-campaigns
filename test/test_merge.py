@@ -48,3 +48,16 @@ class MergeTests(unittest.TestCase):
             (root / 'a/body.html').write_bytes(b'tampered')
             with self.assertRaisesRegex(ValueError, 'checksum/length'):
                 module.merge(inventory, [('run1', root / 'a')], root / 'out')
+
+    def test_rejects_duplicate_ids_and_missing_runs_before_creating_output(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            inventory = root / 'inventory.json'
+            inventory.write_text(json.dumps({'candidates': [{'candidate_id': 'same'}, {'candidate_id': 'same'}]}))
+            with self.assertRaisesRegex(ValueError, 'unique nonempty'):
+                module.merge(inventory, [('run1', root / 'absent')], root / 'out')
+            self.assertFalse((root / 'out').exists())
+            inventory.write_text(json.dumps({'candidates': [{'candidate_id': 'one'}]}))
+            with self.assertRaisesRegex(ValueError, 'run input is missing'):
+                module.merge(inventory, [('run1', root / 'absent')], root / 'out')
+            self.assertFalse((root / 'out').exists())
