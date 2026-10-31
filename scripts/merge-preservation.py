@@ -113,13 +113,16 @@ def merge(inventory, runs, out):
     ledger = []
     for cid, candidate in candidates.items():
         captured = by_candidate[cid]
+        campaign = [r for r in captured if r['kind'] in ('campaign_page', 'campaign_pdf', 'policy_pdf')]
+        reference = [r for r in captured if r not in campaign]
         history = attempts[cid]
-        context_receipts = [r for r in captured if any(o.get('policy_context') for o in r['observations'])]
+        context_receipts = [r for r in campaign if any(o.get('policy_context') for o in r['observations'])]
         ledger.append({**candidate, 'verified_response_count': len(captured),
+                       'campaign_response_count': len(campaign), 'reference_response_count': len(reference),
                        'distinct_source_urls': len({r['source_url'] for r in captured}),
                        'pdf_candidate_count': sum(r['path'].endswith('.pdf') for r in captured),
                        'unreviewed_source_context_receipts': len(context_receipts),
-                       'source_bytes_preserved': bool(captured),
+                       'source_bytes_preserved': bool(campaign), 'reference_bytes_preserved': bool(reference),
                        'current_candidate_site_identity': 'requires_review',
                        'policy_content_completeness': 'not_established',
                        'attempts': history,
@@ -132,10 +135,12 @@ def merge(inventory, runs, out):
                'candidates': ledger})
     write_json(out / 'pdf-verification.json', pdf_checks)
     objects = list((out / 'objects').glob('*')) if (out / 'objects').exists() else []
+    campaign_ids = {r['candidate_id'] for r in values if r['kind'] in ('campaign_page', 'campaign_pdf', 'policy_pdf')}
     summary = {'created_at': now(), 'canonical_candidates': len(candidates),
                'input_success_receipts': input_count, 'deduplicated_receipts': len(values),
-               'candidate_ids_with_captured_bytes': len({r['candidate_id'] for r in values}),
-               'candidate_ids_without_captured_bytes': len(candidates) - len({r['candidate_id'] for r in values}),
+               'candidate_ids_with_captured_bytes': len(campaign_ids),
+               'candidate_ids_without_captured_bytes': len(candidates) - len(campaign_ids),
+               'coverage_counting_basis': 'Campaign page/PDF source bytes only; reference pages and detector reports excluded',
                'unique_bodies': len(objects), 'unique_body_bytes': sum(p.stat().st_size for p in objects),
                'response_kinds': dict(collections.Counter(r['kind'] for r in values)),
                'scope_complete': False, 'runs': [r[0] for r in runs]}

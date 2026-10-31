@@ -49,6 +49,20 @@ class MergeTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'checksum/length'):
                 module.merge(inventory, [('run1', root / 'a')], root / 'out')
 
+    def test_reference_pages_do_not_count_as_preserved_campaign_sources(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            inventory = root / 'inventory.json'
+            inventory.write_text(json.dumps({'candidates': [{'candidate_id': 'candidate1'}]}))
+            record = self.fixture(root / 'a')
+            record['kind'] = 'reference_page'
+            (root / 'a/captures.jsonl').write_text(json.dumps(record) + '\n')
+            summary = module.merge(inventory, [('run1', root / 'a')], root / 'out')
+            self.assertEqual(summary['candidate_ids_with_captured_bytes'], 0)
+            row = json.loads((root / 'out/coverage-ledger.json').read_text())['candidates'][0]
+            self.assertTrue(row['reference_bytes_preserved'])
+            self.assertFalse(row['source_bytes_preserved'])
+
     def test_rejects_duplicate_ids_and_missing_runs_before_creating_output(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
