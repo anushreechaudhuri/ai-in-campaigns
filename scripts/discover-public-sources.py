@@ -19,12 +19,17 @@ def main():
     out=Path(args.out);out.mkdir(parents=True,exist_ok=True)
     engine=Engine(out,64*1024*1024,24)
     receipts=[];findings=[]
-    def fetch(url,label,delay=2):
-        receipt={'source_url':url,'label':label,'checked_at':now()}
+    def fetch(url,label,delay=2,**request_options):
+        receipt={'source_url':url,'label':label,'checked_at':now(),
+                 'access_basis':'Documented anonymous read-only metadata API; source website crawls use robots checks'}
         try:
-            engine.allowed(url)
+            parsed=urllib.parse.urlsplit(url)
+            permitted={'election.org':'/api/v1/','dataverse.harvard.edu':'/api/',
+                       'api.open.fec.gov':'/v1/','query.wikidata.org':'/sparql'}
+            if parsed.hostname not in permitted or not parsed.path.startswith(permitted[parsed.hostname]):
+                raise ValueError('Not an explicitly documented public metadata API')
             engine.delays[origin(url)]=max(delay,engine.delays.get(origin(url),2))
-            status,headers,body=engine.gated_request(url,max_bytes=16*1024*1024)
+            status,headers,body=engine.gated_request(url,max_bytes=16*1024*1024,**request_options)
             receipt.update(http_status=status,bytes=len(body),sha256=digest(body))
             relative='objects/'+digest(body)+'.body'
             atomic_write(out/relative,body);receipt['path']=relative
@@ -58,6 +63,23 @@ def main():
                     if roster:atomic_write(out/'historical-release-roster.csv',roster)
         except Exception as error:
             write_json(out/'historical-profile-error.json',{'error':type(error).__name__})
+    # P2390 is the explicit Ballotpedia identifier; no fuzzy person-name match.
+    seed=json.loads(Path('seeds/candidates-public.json').read_text())['candidates']
+    bindings=[]
+    for start in range(0,len(seed),1000):
+        identifiers=[]
+        for row in seed[start:start+1000]:
+            slug=urllib.parse.unquote(urllib.parse.urlsplit(row['candidate_id']).path.lstrip('/'))
+            identifiers.extend([slug,slug.replace('_',' ')])
+        values=' '.join(json.dumps(value) for value in sorted(set(identifiers)))
+        query='SELECT DISTINCT ?person ?ballotpedia ?website WHERE { VALUES ?ballotpedia { '+values+' } ?person wdt:P2390 ?ballotpedia; wdt:P856 ?website . FILTER(!CONTAINS(LCASE(STR(?website)), ".gov")) }'
+        body=fetch('https://query.wikidata.org/sparql','WikidataExactBallotpediaWebsiteIdentifiers',
+                   method='POST',headers={'Accept':'application/sparql-results+json','Content-Type':'application/x-www-form-urlencoded'},
+                   data=urllib.parse.urlencode({'query':query,'format':'json'}).encode())
+        if not body:break
+        try:bindings.extend(json.loads(body).get('results',{}).get('bindings',[]))
+        except ValueError:break
+        write_json(out/'wikidata-website-identifiers.json',bindings)
     records=json.loads(Path(args.committees).read_text())['rows']
     by_id={r['committee_id']:r for r in records}
     ids=sorted(by_id)
@@ -84,6 +106,9 @@ def main():
                                  'website_evidence':'Exact linked committee ID, official FEC registration response',
                                  'current_site_identity':'not yet inspected','response_sha256':digest(body),'retrieved_at':now()})
         write_json(out/'fec-website-findings.json',findings)
+        if result and all('website' not in record for record in result):
+            write_json(out/'fec-website-field-unavailable.json',{'reason':'This documented committee endpoint did not expose a website field; no absent website inferred. Further identical queries skipped.'})
+            break
     write_json(out/'summary.json',{'finished_at':now(),'source_requests':engine.requests,
                                  'committee_records':len(findings),'reported_websites':sum(bool(r['reported_website']) for r in findings),
                                  'source_outcomes':[{k:r.get(k) for k in ('label','outcome','http_status','reason')} for r in receipts]})
