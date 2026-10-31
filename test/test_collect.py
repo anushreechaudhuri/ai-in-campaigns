@@ -13,6 +13,21 @@ from campaign_research.common import ReadFailure
 
 
 class CollectTests(unittest.TestCase):
+    def test_utf16_bom_policy_links_are_followed_after_html_acceptance(self):
+        calls = []
+        def transport(url, **kwargs):
+            calls.append(url)
+            if url.endswith('/robots.txt'):
+                return 404, {}, b''
+            html = '<html><a href="/issues">Issues</a></html>' if url.endswith('/') else '<html>Policy platform</html>'
+            return 200, {'Content-Type': 'text/html; charset=utf-16'}, html.encode('utf-16')
+        with tempfile.TemporaryDirectory() as root, patch('campaign_research.capture.public_url', side_effect=lambda u: u):
+            Path(root, 'checkpoints').mkdir()
+            state = process_candidate(Engine(root, 100000, 100, transport=transport, sleeper=lambda _: None), {'candidate_id': 'https://ballotpedia.org/Example', 'name': 'Example', 'website': 'https://campaign.example/'}, 6, 0)
+            self.assertIn('https://campaign.example/issues', calls)
+            self.assertEqual(state['policy_pages'], 1)
+            self.assertEqual(state['status'], 'success')
+
     def test_explicit_external_policy_pdf_checks_its_own_robots_without_html_expansion(self):
         for deny in (False, True):
             calls = []

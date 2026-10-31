@@ -12,7 +12,7 @@ from html.parser import HTMLParser
 from pathlib import Path
 from .audit import inventory
 from .capture import Collector
-from .common import MAX_BYTES, digest, inside, now, read_json, request, write_json
+from .common import MAX_BYTES, decode_html, digest, inside, now, read_json, request, write_json
 
 POLICY = re.compile(r"\b(issues?|polic(?:y|ies)|priorities|platform|agenda|vision|positions?|plans?|stand(?:s|ing)?)\b", re.I)
 EXCLUDE = re.compile(r"privacy[-_/ ]+policy|cookie|terms[-_/ ]+(?:of|and|conditions|service)|/(?:donate|volunteer|press|news|blog|events?)(?:/|$)", re.I)
@@ -22,7 +22,7 @@ class Anchors(HTMLParser):
     def __init__(self, body):
         super().__init__()
         self.links, self.href, self.words = [], None, []
-        self.feed(body.decode("utf-8", "replace"))
+        self.feed(decode_html(body))
 
     def handle_starttag(self, tag, attrs):
         if tag == "a":

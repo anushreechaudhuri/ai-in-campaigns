@@ -5,7 +5,7 @@ import time
 import urllib.parse
 from html.parser import HTMLParser
 from pathlib import Path
-from .common import USER_AGENT, atomic_write, digest, get_header, has_html_markup, now, public_url, request, write_json
+from .common import USER_AGENT, atomic_write, decode_html, digest, get_header, has_html_markup, now, public_url, request, write_json
 from .robots import RobotsPolicy
 
 
@@ -122,7 +122,7 @@ class Collector:
             discovered = []
             if not is_pdf:
                 parser = Links()
-                parser.feed(body.decode("utf-8", "replace"))
+                parser.feed(decode_html(body))
                 for href in parser.hrefs:
                     candidate = urllib.parse.urljoin(url, href)
                     p = urllib.parse.urlsplit(candidate)
