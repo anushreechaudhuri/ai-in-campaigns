@@ -35,6 +35,10 @@ class MergeTests(unittest.TestCase):
             self.assertEqual(summary['candidate_ids_without_captured_bytes'], 1)
             record = json.loads((root / 'out/captures.jsonl').read_text())
             self.assertEqual([r['run_id'] for r in record['observations']], ['run1', 'run2'])
+            second = module.merge(inventory, [('import', root / 'out')], root / 'second')
+            imported = json.loads((root / 'second/captures.jsonl').read_text())
+            self.assertEqual(imported['observations'], record['observations'])
+            self.assertEqual(second['deduplicated_receipts'], 1)
             ledger = json.loads((root / 'out/coverage-ledger.json').read_text())['candidates']
             self.assertEqual(ledger[0]['current_candidate_site_identity'], 'requires_review')
             self.assertFalse(summary['scope_complete'])

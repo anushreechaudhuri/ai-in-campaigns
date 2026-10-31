@@ -131,7 +131,12 @@ def merge(inventory, runs, out, scope_review=None):
             if not target.exists():
                 shutil.copyfile(path, target)
             record['path'] = relative
-            for check in record.get('robots_checks', []):
+            inherited_observations = record.get('observations', [])
+            if not isinstance(inherited_observations, list) or any(
+                    not isinstance(item, dict) or not item.get('run_id') for item in inherited_observations):
+                raise ValueError('Inherited observations require source run identities')
+            policy_receipts = [record] + inherited_observations
+            for check in (check for receipt in policy_receipts for check in receipt.get('robots_checks', [])):
                 robot = inside(root, check['path'])
                 if hashlib.sha256(robot.read_bytes()).hexdigest() != check['sha256']:
                     raise ValueError('Robots receipt checksum mismatch')
@@ -147,8 +152,9 @@ def merge(inventory, runs, out, scope_review=None):
                            'policy_context': record.get('policy_context'),
                            'robots_checks': record.get('robots_checks', []),
                            'redirects': record.get('redirects', [])}
-            if observation not in records[key]['observations']:
-                records[key]['observations'].append(observation)
+            for source_observation in inherited_observations or [observation]:
+                if source_observation not in records[key]['observations']:
+                    records[key]['observations'].append(source_observation)
     if applied_decisions != set(decisions):
         raise ValueError('Scope review decision does not match any preserved response')
     values = sorted(records.values(), key=lambda r: (r['candidate_id'], r['source_url'], r['sha256']))
