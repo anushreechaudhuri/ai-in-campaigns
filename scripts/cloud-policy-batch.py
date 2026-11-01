@@ -18,7 +18,7 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 from campaign_research.collect import Engine, origin, validate_controls
-from campaign_research.common import digest, now, write_json
+from campaign_research.common import USER_AGENT, digest, now, write_json
 
 spec = importlib.util.spec_from_file_location('content_review', Path(__file__).with_name('review-policy-content.py'))
 content_review = importlib.util.module_from_spec(spec)
@@ -32,12 +32,12 @@ class Bridge:
     def token(self):
         query = os.environ['ACTIONS_ID_TOKEN_REQUEST_URL']
         query += ('&' if '?' in query else '?') + urllib.parse.urlencode({'audience': self.url})
-        req = urllib.request.Request(query, headers={'Authorization': 'Bearer ' + os.environ['ACTIONS_ID_TOKEN_REQUEST_TOKEN']})
+        req = urllib.request.Request(query, headers={'Authorization': 'Bearer ' + os.environ['ACTIONS_ID_TOKEN_REQUEST_TOKEN'], 'User-Agent': USER_AGENT})
         with urllib.request.urlopen(req, timeout=30) as response:
             return json.load(response)['value']
 
     def exchange(self, key, body=None):
-        headers = {'Authorization': 'Bearer ' + self.token()}
+        headers = {'Authorization': 'Bearer ' + self.token(), 'User-Agent': USER_AGENT}
         if body is not None:
             headers['X-Content-SHA256'] = digest(body)
             headers['Content-Type'] = 'application/octet-stream'
