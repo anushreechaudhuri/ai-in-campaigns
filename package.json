@@ -7,6 +7,8 @@
     "build": "node build.mjs",
     "dev": "node scripts/dev.mjs",
     "test": "node --test test/*.test.mjs",
+    "test:research": "python3 -m unittest discover -s test -p 'test_*.py' -v",
+    "research": "python3 scripts/research.py",
     "deploy": "npm run build && wrangler deploy"
   },
   "dependencies": {
