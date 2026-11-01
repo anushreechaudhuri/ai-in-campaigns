@@ -5,24 +5,27 @@ let keyCache=null;
 const json=(value,status=200)=>new Response(JSON.stringify(value),{status,headers:{'content-type':'application/json','cache-control':'no-store','x-content-type-options':'nosniff'}});
 function decode(value){if(!/^[A-Za-z0-9_-]+$/.test(value))throw Error('Invalid token');return Uint8Array.from(atob(value.replace(/-/g,'+').replace(/_/g,'/')),c=>c.charCodeAt(0));}
 export async function authenticate(token,env,fetcher=fetch,clock=Date.now){
+  let stage='token';try{
   if(!token||token.length>16384)throw Error('Unauthorized');
   const parts=token.split('.');if(parts.length!==3)throw Error('Unauthorized');
-  const header=JSON.parse(new TextDecoder().decode(decode(parts[0])));
+  stage='header';const header=JSON.parse(new TextDecoder().decode(decode(parts[0])));
   if(header.alg!=='RS256'||!header.kid)throw Error('Unauthorized');
-  const load=async()=>{const r=await fetcher(ISSUER+'/.well-known/jwks',{redirect:'error'});if(!r.ok)throw Error('Identity keys unavailable');keyCache={keys:(await r.json()).keys,until:clock()+3600000};};
+  stage='keys';const load=async()=>{const r=await fetcher(ISSUER+'/.well-known/jwks',{redirect:'error',headers:{'User-Agent':'CampaignPreservationAudit/1.0 (+https://github.com/anushreechaudhuri/ai-in-campaigns)'}});if(!r.ok){stage='keys_http_'+r.status;throw Error('Identity keys unavailable');}stage='keys_json';const payload=await r.json();if(!Array.isArray(payload.keys))throw Error('Invalid identity key set');keyCache={keys:payload.keys,until:clock()+3600000};stage='keys';};
   if(!keyCache||keyCache.until<clock())await load();
   let jwk=keyCache.keys.find(k=>k.kid===header.kid&&k.kty==='RSA'&&k.alg==='RS256');
   if(!jwk){await load();jwk=keyCache.keys.find(k=>k.kid===header.kid&&k.kty==='RSA'&&k.alg==='RS256');}
-  if(!jwk)throw Error('Unauthorized');
-  const key=await crypto.subtle.importKey('jwk',jwk,{name:'RSASSA-PKCS1-v1_5',hash:'SHA-256'},false,['verify']);
+  if(!jwk){stage='key_id';throw Error('Unauthorized');}
+  stage='signature';const key=await crypto.subtle.importKey('jwk',jwk,{name:'RSASSA-PKCS1-v1_5',hash:'SHA-256'},false,['verify']);
   if(!await crypto.subtle.verify('RSASSA-PKCS1-v1_5',key,decode(parts[2]),enc.encode(parts[0]+'.'+parts[1])))throw Error('Unauthorized');
-  const c=JSON.parse(new TextDecoder().decode(decode(parts[1]))),now=clock()/1000;
-  if(c.iss!==ISSUER||c.aud!==env.AUDIENCE||!Number.isFinite(c.exp)||c.exp<=now||c.exp>now+3600||!Number.isFinite(c.iat)||c.iat>now+60||c.iat<now-3600||!Number.isFinite(c.nbf)||c.nbf>now+60||clock()>=Date.parse(env.EXPIRES_AT))throw Error('Unauthorized');
+  stage='claims';const c=JSON.parse(new TextDecoder().decode(decode(parts[1]))),now=clock()/1000;
+  if(c.iss!==ISSUER)throw Error('claim_iss');if(c.aud!==env.AUDIENCE)throw Error('claim_aud');
+  stage='time';if(!Number.isFinite(c.exp)||c.exp<=now||c.exp>now+3600)throw Error('claim_exp');if(!Number.isFinite(c.iat)||c.iat>now+60||c.iat<now-3600)throw Error('claim_iat');if(!Number.isFinite(c.nbf)||c.nbf>now+60)throw Error('claim_nbf');if(clock()>=Date.parse(env.EXPIRES_AT))throw Error('claim_bridge_expired');
   for(const [field,expected] of Object.entries({repository:env.REPOSITORY,repository_id:env.REPOSITORY_ID,repository_owner_id:env.OWNER_ID,repository_visibility:'private',ref:env.REF,workflow_ref:env.WORKFLOW_REF,workflow_sha:env.WORKFLOW_SHA,sha:env.WORKFLOW_SHA,event_name:'push',runner_environment:'github-hosted'})){if(String(c[field])!==expected)throw Error('claim_'+field);}
   // Both legacy and immutable GitHub subject formats are covered by exact immutable
   // repository IDs plus exact ref/workflow/commit above. No subject-only wildcard.
   if(typeof c.sub!=='string'||!c.sub.startsWith('repo:')||!/^[0-9]+$/.test(String(c.run_id))||!/^[0-9]+$/.test(String(c.run_attempt)))throw Error('Unauthorized');
   return c;
+  }catch(error){error.authStage=stage;throw error;}
 }
 function safeKey(key){return typeof key==='string'&&!key.includes('%')&&!key.includes('\\')&&key.split('/').every(s=>s&&s!=='.'&&s!=='..'&&/^[A-Za-z0-9_.-]+$/.test(s));}
 export async function handle(request,env,claims){
@@ -55,7 +58,7 @@ export async function handle(request,env,claims){
 }
 export default{async fetch(request,env){
   if(new URL(request.url).pathname==='/health'&&request.method==='GET')return json({service:'campaign-preservation-transfer',expires_at:env.EXPIRES_AT});
-  let claims;try{claims=await authenticate(request.headers.get('authorization')?.replace(/^Bearer /,''),env);}catch(error){return json({error:'Unauthorized',check:/^claim_[a-z_]+$/.test(error.message)?error.message:'signature_or_time'},401);}
+  let claims;try{claims=await authenticate(request.headers.get('authorization')?.replace(/^Bearer /,''),env);}catch(error){return json({error:'Unauthorized',check:/^claim_[a-z_]+$/.test(error.message)?error.message:(error.authStage||'unknown')},401);}
   if(new URL(request.url).pathname!=='/object')return json({error:'Not found'},404);
   try{return await handle(request,env,claims);}catch{return json({error:'Storage operation failed'},502);}
 }};

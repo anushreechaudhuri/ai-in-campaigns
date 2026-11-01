@@ -21,6 +21,9 @@ def sha(body):
 
 
 def validate_plan(plan, source):
+    if (plan['account_id'] != 'e84fe353569d25772e1018a57e090b26' or
+            plan['bucket'] != 'ai-in-campaigns-data'):
+        raise ValueError('Plan targets a different account or bucket')
     prefix = plan['proposed_new_prefix']
     if not prefix.startswith('private/') or not prefix.endswith('/'):
         raise ValueError('Transfer requires a private destination prefix')
@@ -37,8 +40,10 @@ def validate_plan(plan, source):
         if len(body) != row['bytes'] or sha(body) != row['sha256']:
             raise ValueError('Local transfer checksum mismatch')
         keys.add(key)
-    if (not plan['completion_marker_key'].startswith(prefix) or
-            plan['completion_marker_key'] in keys):
+    marker = plan['completion_marker_key']
+    if (not marker.startswith(prefix) or marker in keys or
+            any(p in ('', '.', '..') for p in marker.split('/')) or
+            any(c in marker for c in ('%', '\\', '?', '#'))):
         raise ValueError('Completion marker must be a separate private key')
 
 

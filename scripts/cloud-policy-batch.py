@@ -77,6 +77,8 @@ def main():
     p.add_argument('--bridge', required=True)
     p.add_argument('--input-key', required=True)
     p.add_argument('--input-sha256', required=True)
+    p.add_argument('--fallback-input', type=Path,
+                   help='Hash-identical private input when R2 authentication is unavailable')
     p.add_argument('--write-prefix', required=True)
     p.add_argument('--shard', type=int, required=True)
     p.add_argument('--out', type=Path, required=True)
@@ -86,7 +88,15 @@ def main():
         raise ValueError('Invalid bounded research run')
     a.out.mkdir(parents=True, exist_ok=False)
     bridge = Bridge(a.bridge)
-    raw = bridge.get(a.input_key)
+    try:
+        raw = bridge.get(a.input_key)
+    except (RuntimeError, urllib.error.URLError, OSError) as error:
+        if not a.fallback_input:
+            raise
+        raw = a.fallback_input.read_bytes()
+        bridge = None
+        print(json.dumps({'r2_preflight': 'deferred', 'reason_type': type(error).__name__,
+                          'fallback': 'Hash-bound private input; private hosted backups required'}), flush=True)
     if digest(raw) != a.input_sha256:
         raise ValueError('Private input checksum mismatch')
     payload = json.loads(raw)
@@ -126,7 +136,9 @@ def main():
     root_prefix = a.write_prefix + os.environ['GITHUB_RUN_ID'] + '-' + os.environ['GITHUB_RUN_ATTEMPT'] + '/' + str(a.shard) + '/'
     uploaded = {}
 
-    def upload_checkpoint():
+    def upload_checkpoint_r2():
+        if bridge is None:
+            return
         receipts = []
         # Content-addressed output versions avoid every destructive overwrite.
         for path in sorted(a.out.rglob('*')):
@@ -149,6 +161,17 @@ def main():
         receipt = bridge.put(key, body)
         write_json(a.out / 'r2-readback.json', {'checkpoint': receipt, 'files': receipts})
         print(json.dumps({'r2_checkpoint_verified': key, 'files': len(receipts), 'completed_inputs': len(states)}), flush=True)
+
+    def upload_checkpoint():
+        nonlocal bridge
+        try:
+            upload_checkpoint_r2()
+        except (RuntimeError, urllib.error.URLError, OSError) as error:
+            write_json(a.out / 'r2-transfer-deferred.json', {
+                'checked_at': now(), 'reason_type': type(error).__name__,
+                'message': 'Preserved local source bytes continue to private hosted backups; partial R2 objects remain immutable.'})
+            bridge = None
+            print(json.dumps({'r2_checkpoint': 'deferred', 'local_sources_preserved': True}), flush=True)
 
     def acquire(row):
         state = {'candidate_id': row['candidate_id'], 'source_url': row['source_url'], 'started_at': now(),
@@ -197,7 +220,8 @@ def main():
                    'saved_source_responses': sum(r['status'] == 'saved_source_bytes' for r in states),
                    'saved_policy_text_candidates': sum(r.get('saved_policy_text_candidate', False) for r in states),
                    'network_requests': engine.requests, 'response_body_bytes_charged': engine.downloaded,
-                   'policy_completeness': 'not_established', 'scoring_requests': 0}
+                   'policy_completeness': 'not_established', 'scoring_requests': 0,
+                   'r2_transfer_enabled': bridge is not None}
         write_json(a.out / 'summary.json', summary)
         upload_checkpoint()
         print(json.dumps(summary), flush=True)
