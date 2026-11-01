@@ -10,7 +10,7 @@ export async function authenticate(token,env,fetcher=fetch,clock=Date.now){
   const parts=token.split('.');if(parts.length!==3)throw Error('Unauthorized');
   stage='header';const header=JSON.parse(new TextDecoder().decode(decode(parts[0])));
   if(header.alg!=='RS256'||!header.kid)throw Error('Unauthorized');
-  stage='keys';const load=async()=>{const r=await fetcher(ISSUER+'/.well-known/jwks',{redirect:'error',headers:{'User-Agent':'CampaignPreservationAudit/1.0 (+https://github.com/anushreechaudhuri/ai-in-campaigns)'}});if(!r.ok){stage='keys_http_'+r.status;throw Error('Identity keys unavailable');}stage='keys_json';const payload=await r.json();if(!Array.isArray(payload.keys))throw Error('Invalid identity key set');keyCache={keys:payload.keys,until:clock()+3600000};stage='keys';};
+  stage='keys';const load=async()=>{if(env.PINNED_JWKS_JSON){const payload=JSON.parse(env.PINNED_JWKS_JSON);if(!Array.isArray(payload.keys)||!payload.keys.length)throw Error('Invalid pinned identity keys');keyCache={keys:payload.keys,until:clock()+3600000};return;}const r=await fetcher(ISSUER+'/.well-known/jwks',{redirect:'error',headers:{'User-Agent':'CampaignPreservationAudit/1.0 (+https://github.com/anushreechaudhuri/ai-in-campaigns)'}});if(!r.ok){stage='keys_http_'+r.status;throw Error('Identity keys unavailable');}stage='keys_json';const payload=await r.json();if(!Array.isArray(payload.keys))throw Error('Invalid identity key set');keyCache={keys:payload.keys,until:clock()+3600000};stage='keys';};
   if(!keyCache||keyCache.until<clock())await load();
   let jwk=keyCache.keys.find(k=>k.kid===header.kid&&k.kty==='RSA'&&k.alg==='RS256');
   if(!jwk){await load();jwk=keyCache.keys.find(k=>k.kid===header.kid&&k.kty==='RSA'&&k.alg==='RS256');}
