@@ -14,6 +14,7 @@ from pathlib import Path
 TOPICS = re.compile(r'\b(?:health(?:care)?|education|immigration|climate|energy|tax(?:es)?|housing|abortion|veterans|economy|jobs|agriculture|security|rights|infrastructure|trade|medicare|social security)\b', re.I)
 POLICY = re.compile(r'\b(?:issues?|polic(?:y|ies)|priorities|platform|agenda|vision|positions?|plans?)\b', re.I)
 PARKED = re.compile(r'(?:domain (?:is )?for sale|buy this domain|sedo domain parking|this domain has expired)', re.I)
+NON_POLICY = re.compile(r'privacy|cookie|terms[-_/ ]|donat(?:e|ion)|unsubscribe|merchant-policies', re.I)
 
 
 class VisibleText(HTMLParser):
@@ -70,11 +71,14 @@ def review(record, body, candidate, pdf_extractor=True):
     office = bool(re.search(r'\bsenat(?:e|or)\b' if candidate['chamber'] == 'Senate' else r'\b(?:congress|house of representatives|congressional)\b', norm))
     cycle = bool(re.search(r'\b2026\b', text))
     parked = bool(PARKED.search(text))
-    url_signal = bool(POLICY.search(urllib.parse.urlsplit(record.get('final_url') or record['source_url']).path))
-    content_signal = words >= 150 and len(topics) >= 2
+    path = urllib.parse.urlsplit(record.get('final_url') or record['source_url']).path
+    non_policy = bool(NON_POLICY.search(path))
+    url_signal = bool(POLICY.search(path)) and not non_policy
+    content_signal = words >= 150 and len(topics) >= 2 and not non_policy
     result = {'candidate_id': record['candidate_id'], 'source_url': record['source_url'],
               'source_sha256': record['sha256'], 'captured_at': record.get('captured_at'),
               'text_words': words, 'policy_url_signal': url_signal,
+              'non_policy_navigation_url': non_policy,
               'policy_text_signal': content_signal, 'topic_terms': topics,
               'candidate_name_text_match': name_match, 'office_text_match': office,
               'cycle_2026_text_present': cycle, 'parked_domain_text': parked,
@@ -106,7 +110,10 @@ def main():
             if key in cache:
                 result = {**cache[key], 'source_url': row['source_url'], 'captured_at': row.get('captured_at')}
                 # URL-specific signal must be recomputed for byte-identical home/issues shells.
-                result['policy_url_signal'] = bool(POLICY.search(urllib.parse.urlsplit(row.get('final_url') or row['source_url']).path))
+                path = urllib.parse.urlsplit(row.get('final_url') or row['source_url']).path
+                result['non_policy_navigation_url'] = bool(NON_POLICY.search(path))
+                result['policy_url_signal'] = bool(POLICY.search(path)) and not result['non_policy_navigation_url']
+                result['policy_text_signal'] = result['text_words'] >= 150 and len(result['topic_terms']) >= 2 and not result['non_policy_navigation_url']
                 result['saved_policy_text_candidate'] = result['policy_text_signal'] and not result['parked_domain_text'] and (result['policy_url_signal'] or result['document_kind'] != 'html')
             else:
                 result, text = review(row, (a.corpus / row['path']).read_bytes(), by_id[row['candidate_id']])
