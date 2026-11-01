@@ -54,21 +54,27 @@ class R2:
                      urllib.parse.quote(bucket, safe=''))
         self.config = config
 
-    def request(self, key, body=None):
+    def api(self, path, body=None):
         token = tomllib.loads(self.config.read_text())['oauth_token']
         headers = {'Authorization': 'Bearer ' + token}
         if body is not None:
             headers.update({'Content-Type': 'application/octet-stream',
                             'Cache-Control': 'private, max-age=0',
                             'If-None-Match': '*'})
-        url = self.base + '/objects/' + urllib.parse.quote(key, safe='/')
+        url = self.base + path
         req = urllib.request.Request(url, data=body, headers=headers,
                                      method='GET' if body is None else 'PUT')
         try:
-            with urllib.request.urlopen(req, timeout=180) as response:
+            class NoRedirect(urllib.request.HTTPRedirectHandler):
+                def redirect_request(self, *args, **kwargs):
+                    return None
+            with urllib.request.build_opener(NoRedirect()).open(req, timeout=180) as response:
                 return response.status, response.read()
         except urllib.error.HTTPError as error:
             return error.code, error.read()
+
+    def request(self, key, body=None):
+        return self.api('/objects/' + urllib.parse.quote(key, safe='/'), body)
 
     def ensure(self, key, body):
         expected = sha(body)

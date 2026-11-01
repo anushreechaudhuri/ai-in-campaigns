@@ -1,6 +1,10 @@
 import importlib.util
+import json
+import os
 import sys
+import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
@@ -41,3 +45,31 @@ class DirectoryIdentityTests(unittest.TestCase):
     def test_equivalent_hosts_and_tracking_parameters_do_not_create_new_capture_urls(self):
         self.assertEqual(module.normalized_url('http://www.jane.example/issues/?utm_source=feed'),
                          module.normalized_url('https://jane.example/issues'))
+
+    def test_resume_retains_config_and_rejects_corrupted_saved_bytes_before_requests(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            source = root / 'input.json'
+            raw = json.dumps({'profiles': [], 'candidates': [], 'seen_urls': {}, 'blocked_source_origins': {}}).encode()
+            source.write_bytes(raw)
+            out = root / 'run'
+            args = ['directory', '--bridge', 'https://unused.example', '--input-key', 'private/input',
+                    '--input-sha256', module.digest(raw), '--write-prefix', 'private/cloud-runs/test/',
+                    '--fallback-input', str(source), '--out', str(out)]
+            env = {'GITHUB_SHA': 'workflow', 'CODE_COMMIT': 'code', 'GITHUB_RUN_ID': '123', 'GITHUB_RUN_ATTEMPT': '1'}
+            with patch.dict(os.environ, env), patch.object(module.cloud_batch.Bridge, 'get', side_effect=RuntimeError('Unavailable')):
+                with patch.object(sys, 'argv', args):
+                    module.main()
+                original = (out / 'run-config.json').read_bytes()
+                with patch.object(sys, 'argv', args + ['--resume']):
+                    module.main()
+                self.assertEqual((out / 'run-config.json').read_bytes(), original)
+                self.assertEqual(json.loads((out / 'summary.json').read_text())['lifetime_network_requests'], 0)
+                (out / 'objects').mkdir()
+                (out / 'objects/source.html').write_bytes(b'changed')
+                (out / 'captures.jsonl').write_text(json.dumps({'candidate_id': 'c', 'kind': 'campaign_page',
+                                                               'source_url': 'https://example.org/issues',
+                                                               'sha256': module.digest(b'original'), 'bytes': 8,
+                                                               'path': 'objects/source.html'}) + '\n')
+                with patch.object(sys, 'argv', args + ['--resume']), self.assertRaisesRegex(ValueError, 'Resume source bytes'):
+                    module.main()
