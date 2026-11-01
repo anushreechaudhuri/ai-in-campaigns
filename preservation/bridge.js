@@ -18,7 +18,7 @@ export async function authenticate(token,env,fetcher=fetch,clock=Date.now){
   if(!await crypto.subtle.verify('RSASSA-PKCS1-v1_5',key,decode(parts[2]),enc.encode(parts[0]+'.'+parts[1])))throw Error('Unauthorized');
   const c=JSON.parse(new TextDecoder().decode(decode(parts[1]))),now=clock()/1000;
   if(c.iss!==ISSUER||c.aud!==env.AUDIENCE||!Number.isFinite(c.exp)||c.exp<=now||c.exp>now+3600||!Number.isFinite(c.iat)||c.iat>now+60||c.iat<now-3600||!Number.isFinite(c.nbf)||c.nbf>now+60||clock()>=Date.parse(env.EXPIRES_AT))throw Error('Unauthorized');
-  if(c.repository!==env.REPOSITORY||String(c.repository_id)!==env.REPOSITORY_ID||String(c.repository_owner_id)!==env.OWNER_ID||c.repository_visibility!=='private'||c.ref!==env.REF||c.workflow_ref!==env.WORKFLOW_REF||c.workflow_sha!==env.WORKFLOW_SHA||c.sha!==env.WORKFLOW_SHA||c.event_name!=='push'||c.runner_environment!=='github-hosted')throw Error('Unauthorized');
+  for(const [field,expected] of Object.entries({repository:env.REPOSITORY,repository_id:env.REPOSITORY_ID,repository_owner_id:env.OWNER_ID,repository_visibility:'private',ref:env.REF,workflow_ref:env.WORKFLOW_REF,workflow_sha:env.WORKFLOW_SHA,sha:env.WORKFLOW_SHA,event_name:'push',runner_environment:'github-hosted'})){if(String(c[field])!==expected)throw Error('claim_'+field);}
   // Both legacy and immutable GitHub subject formats are covered by exact immutable
   // repository IDs plus exact ref/workflow/commit above. No subject-only wildcard.
   if(typeof c.sub!=='string'||!c.sub.startsWith('repo:')||!/^[0-9]+$/.test(String(c.run_id))||!/^[0-9]+$/.test(String(c.run_attempt)))throw Error('Unauthorized');
@@ -55,7 +55,7 @@ export async function handle(request,env,claims){
 }
 export default{async fetch(request,env){
   if(new URL(request.url).pathname==='/health'&&request.method==='GET')return json({service:'campaign-preservation-transfer',expires_at:env.EXPIRES_AT});
-  let claims;try{claims=await authenticate(request.headers.get('authorization')?.replace(/^Bearer /,''),env);}catch{return json({error:'Unauthorized'},401);}
+  let claims;try{claims=await authenticate(request.headers.get('authorization')?.replace(/^Bearer /,''),env);}catch(error){return json({error:'Unauthorized',check:/^claim_[a-z_]+$/.test(error.message)?error.message:'signature_or_time'},401);}
   if(new URL(request.url).pathname!=='/object')return json({error:'Not found'},404);
   try{return await handle(request,env,claims);}catch{return json({error:'Storage operation failed'},502);}
 }};

@@ -52,7 +52,8 @@ class Bridge:
     def get(self, key):
         status, body = self.exchange(key)
         if status != 200:
-            raise RuntimeError(f'Research input read failed, HTTP {status}')
+            detail = json.loads(body).get('check', '') if body.startswith(b'{') else ''
+            raise RuntimeError(f'Research input read failed, HTTP {status}; check={detail}')
         return body
 
     def put(self, key, body):
