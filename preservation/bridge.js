@@ -20,7 +20,9 @@ export async function authenticate(token,env,fetcher=fetch,clock=Date.now){
   stage='claims';const c=JSON.parse(new TextDecoder().decode(decode(parts[1]))),now=clock()/1000;
   if(c.iss!==ISSUER)throw Error('claim_iss');if(c.aud!==env.AUDIENCE)throw Error('claim_aud');
   stage='time';if(!Number.isFinite(c.exp)||c.exp<=now||c.exp>now+3600)throw Error('claim_exp');if(!Number.isFinite(c.iat)||c.iat>now+60||c.iat<now-3600)throw Error('claim_iat');if(!Number.isFinite(c.nbf)||c.nbf>now+60)throw Error('claim_nbf');if(clock()>=Date.parse(env.EXPIRES_AT))throw Error('claim_bridge_expired');
-  for(const [field,expected] of Object.entries({repository:env.REPOSITORY,repository_id:env.REPOSITORY_ID,repository_owner_id:env.OWNER_ID,repository_visibility:'private',ref:env.REF,workflow_ref:env.WORKFLOW_REF,workflow_sha:env.WORKFLOW_SHA,sha:env.WORKFLOW_SHA,event_name:'push',runner_environment:'github-hosted'})){if(String(c[field])!==expected)throw Error('claim_'+field);}
+  for(const [field,expected] of Object.entries({repository:env.REPOSITORY,repository_id:env.REPOSITORY_ID,repository_owner_id:env.OWNER_ID,repository_visibility:'private',event_name:'push',runner_environment:'github-hosted'})){if(String(c[field])!==expected)throw Error('claim_'+field);}
+  const bindings=env.WORKFLOW_BINDINGS?JSON.parse(env.WORKFLOW_BINDINGS):[{sha:env.WORKFLOW_SHA,ref:env.REF,workflow_ref:env.WORKFLOW_REF}];
+  if(!bindings.some(b=>c.ref===b.ref&&c.workflow_ref===b.workflow_ref&&c.workflow_sha===b.sha&&c.sha===b.sha))throw Error('claim_workflow_pin');
   // Both legacy and immutable GitHub subject formats are covered by exact immutable
   // repository IDs plus exact ref/workflow/commit above. No subject-only wildcard.
   if(typeof c.sub!=='string'||!c.sub.startsWith('repo:')||!/^[0-9]+$/.test(String(c.run_id))||!/^[0-9]+$/.test(String(c.run_attempt)))throw Error('Unauthorized');
@@ -51,7 +53,7 @@ export async function handle(request,env,claims){
   const prior=await env.RESEARCH.head(key);
   if(prior){if(prior.size!==bytes||prior.customMetadata?.sha256!==sha)return json({error:'Existing object differs; overwrite refused'},409);return json({key,bytes,sha256:sha,reused:true});}
   let cursor,storedBytes=0,count=0;
-  do{const page=await env.RESEARCH.list({prefix:env.WRITE_PREFIX,limit:1000,...(cursor?{cursor}:{})});storedBytes+=page.objects.reduce((n,o)=>n+o.size,0);count+=page.objects.length;cursor=page.truncated?page.cursor:null;if(count>6000||storedBytes+bytes>Number(env.MAX_STORED_BYTES))return json({error:'Research storage budget reached'},413);}while(cursor);
+  do{const page=await env.RESEARCH.list({prefix:env.WRITE_PREFIX,limit:1000,...(cursor?{cursor}:{})});storedBytes+=page.objects.reduce((n,o)=>n+o.size,0);count+=page.objects.length;cursor=page.truncated?page.cursor:null;if(count>10000||storedBytes+bytes>Number(env.MAX_STORED_BYTES))return json({error:'Research storage budget reached'},413);}while(cursor);
   const saved=await env.RESEARCH.put(key,body,{onlyIf:new Headers({'If-None-Match':'*'}),sha256:sha,httpMetadata:{contentType:'application/octet-stream',cacheControl:'private, max-age=0'},customMetadata:{sha256:sha,run_id:String(claims.run_id),workflow_sha:claims.workflow_sha}});
   if(!saved)return json({error:'Concurrent object exists; read before retry'},409);
   return json({key,bytes,sha256:sha,reused:false},201);
