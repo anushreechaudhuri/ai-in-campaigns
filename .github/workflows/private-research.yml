@@ -1,0 +1,67 @@
+name: Private inventory audit or bounded capture
+# This file is staged only. Configure the research environment and scoped R2 access
+# after owner approval. It has no schedule and never deploys or calls Pangram.
+on:
+  workflow_dispatch:
+    inputs:
+      task:
+        description: Research task
+        required: true
+        default: audit
+        type: choice
+        options: [audit, capture]
+      limit:
+        description: Maximum source captures (1-100, only used for capture)
+        default: '5'
+        required: true
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: private-research
+  cancel-in-progress: false
+jobs:
+  research:
+    runs-on: ubuntu-latest
+    environment: research
+    timeout-minutes: 45
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.RESEARCH_R2_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: e84fe353569d25772e1018a57e090b26
+      INVENTORY_KEY: ${{ vars.CANDIDATE_INVENTORY_KEY }}
+      MANIFEST_KEY: ${{ vars.PRESERVATION_MANIFEST_KEY }}
+      CAPTURE_LIMIT: ${{ inputs.limit }}
+      RESEARCH_TASK: ${{ inputs.task }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Fetch private inventory and existing manifest
+        run: |
+          test -n "$INVENTORY_KEY"
+          test -n "$MANIFEST_KEY"
+          python scripts/research.py r2 pull --key "$INVENTORY_KEY" --file data/candidates.csv
+          python scripts/research.py r2 pull --key "$MANIFEST_KEY" --file data/preservation.jsonl
+      - name: Read current public dashboard
+        continue-on-error: true
+        run: python scripts/research.py snapshot --out runs/current/public
+      - name: Reconcile full inventory (metadata only for remote sources)
+        run: |
+          args=(--inventory data/candidates.csv --manifest data/preservation.jsonl --expected-candidates 4319 --out runs/current/audit)
+          if [ -f runs/current/public/dataset.json ]; then
+            args+=(--dataset runs/current/public/dataset.json)
+          fi
+          python scripts/research.py audit "${args[@]}"
+      - name: Capture a bounded priority batch
+        if: inputs.task == 'capture'
+        run: >-
+          python scripts/research.py capture --queue runs/current/audit/priority-queue.csv
+          --limit "$CAPTURE_LIMIT" --out runs/current/capture
+      - name: Persist completed run privately, including new source bytes
+        if: always()
+        run: |
+          if [ -d runs/current ]; then
+            python scripts/research.py upload-run --root runs/current --key-prefix "private/cloud-runs/github-${{ github.run_id }}-${{ github.run_attempt }}"
+          fi
+      # Never upload private inventory/audit/corpus to public Actions artifacts or Git.

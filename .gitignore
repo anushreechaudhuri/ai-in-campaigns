@@ -12,3 +12,6 @@ research/
 archive/
 runs/
 data/
+delivery/
+__pycache__/
+*.pyc
